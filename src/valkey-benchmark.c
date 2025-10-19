@@ -4953,10 +4953,10 @@ int main(int argc, char **argv) {
          * MIXED group: ef_search (affects recall AND latency/throughput tradeoff)
          * THROUGHPUT group: clients, threads, pipeline (affect QPS/latency, minimal recall impact)
          */
-        optimizer_add_param_grouped(config.optimizer, "clients", 1, 1000, 10, config.numclients, PARAM_GROUP_THROUGHPUT);
-        optimizer_add_param_grouped(config.optimizer, "threads", 0, 32, 1, config.num_threads, PARAM_GROUP_THROUGHPUT);
-        // optimizer_add_param_grouped(config.optimizer, "pipeline", 1, 1000, 10, config.pipeline, PARAM_GROUP_THROUGHPUT);
-        optimizer_add_param_grouped(config.optimizer, "ef_search", 10, 1000, 10, config.search.ef_search, PARAM_GROUP_MIXED);
+        optimizer_add_param_grouped(config.optimizer, "clients", 1, 1500, 5, config.numclients, PARAM_GROUP_THROUGHPUT);
+        optimizer_add_param_grouped(config.optimizer, "threads", 0, 16, 1, config.num_threads, PARAM_GROUP_THROUGHPUT);
+        // optimizer_add_param_grouped(config.optimizer, "pipeline", 1, 1000, 1, config.pipeline, PARAM_GROUP_THROUGHPUT);
+        optimizer_add_param_grouped(config.optimizer, "ef_search", 20, 500, 1, config.search.ef_search, PARAM_GROUP_MIXED);
         
         /* Add RPS as constraint-only parameter if specified */
         if (config.rps > 0) {
@@ -5001,14 +5001,14 @@ int main(int argc, char **argv) {
             iteration++;
             
             /* Get current configuration from optimizer */
-            int opt_config[3];
-            optimizer_get_current_config(config.optimizer, opt_config, 3);
+            int opt_config[4];  /* clients, threads, ef_search (pipeline commented out) */
+            optimizer_get_current_config(config.optimizer, opt_config, 4);
             
             /* Apply configuration */
-            config.numclients = opt_config[0];
-            config.num_threads = opt_config[1];
-            // config.pipeline = opt_config[2];
-            config.search.ef_search = opt_config[2];
+            config.numclients = opt_config[0];     /* clients */
+            config.num_threads = opt_config[1];    /* threads */
+            // config.pipeline = opt_config[2];    /* pipeline (not yet enabled) */
+            config.search.ef_search = opt_config[2];  /* ef_search */
             
             /* Temporarily override requests with optimize_min_requests for faster iterations */
             config.requests = config.optimize_min_requests;

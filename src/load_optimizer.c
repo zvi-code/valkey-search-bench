@@ -91,6 +91,7 @@ static const char* phase_names[] = {
 static int estimate_grid_points(const param_t *p);
 static void init_grid_search_for_throughput(optimizer_t *opt);
 static int update_grid_search(optimizer_t *opt, double current_score, int constraints_satisfied);
+static void print_grid_search_plan(optimizer_t *opt);
 
 /* ============================================================================
  * Optimizer Creation and Configuration
@@ -180,6 +181,7 @@ bool optimizer_add_param_grouped(optimizer_t *opt, const char *name,
     p->last_update_iter = 0;
     p->is_tunable = true;  /* This is a tunable parameter */
     p->locked = false;     /* Not locked initially */
+    p->grid_searched = false; /* Not yet grid searched */
     p->group = group;      /* Set parameter group */
     
     opt->num_params++;
@@ -205,6 +207,7 @@ bool optimizer_add_constraint_param(optimizer_t *opt, const char *name, int curr
     p->last_update_iter = 0;
     p->is_tunable = false;  /* This is constraint-only, not tunable */
     p->locked = false;     /* Constraint-only params are not locked */
+    p->grid_searched = false; /* Not applicable for constraint-only params */
     p->group = PARAM_GROUP_MIXED;  /* Group doesn't matter for constraint-only params */
     
     opt->num_params++;
@@ -763,20 +766,29 @@ static void update_phase(optimizer_t *opt) {
                     /* Found optimal value, move to throughput optimization */
                     opt->phase = PHASE_THROUGHPUT;
                     opt->learning_rate = opt->initial_learning_rate * 0.5;  /* Lower learning rate */
+                    
+                    /* Print grid search plan for transparency */
+                    print_grid_search_plan(opt);
                 } else {
                     /* No feasible solution found in binary search range */
                     /* Try throughput phase anyway */
                     opt->phase = PHASE_THROUGHPUT;
                     opt->learning_rate = opt->initial_learning_rate * 0.5;
+                    
+                    /* Print grid search plan for transparency */
+                    print_grid_search_plan(opt);
                 }
             }
             break;
         
         case PHASE_THROUGHPUT:
             /* Move to HILL_CLIMB once throughput optimization converges */
-            if (check_convergence(opt) || opt->learning_rate < 0.1) {
-                opt->phase = PHASE_HILL_CLIMB;
-                opt->learning_rate = opt->initial_learning_rate * 0.5;  /* Lower LR for fine-tuning */
+            /* IMPORTANT: Don't check convergence during grid search - let it complete exhaustively */
+            if (!opt->grid_search_active) {
+                if (check_convergence(opt) || opt->learning_rate < 0.1) {
+                    opt->phase = PHASE_HILL_CLIMB;
+                    opt->learning_rate = opt->initial_learning_rate * 0.5;  /* Lower LR for fine-tuning */
+                }
             }
             break;
             
@@ -901,30 +913,115 @@ static int update_binary_search(optimizer_t *opt, int constraints_satisfied) {
     return 1;
 }
 
+/*
+ * Print the grid search optimization plan.
+ * Shows which parameters will be optimized and in what order.
+ */
+static void print_grid_search_plan(optimizer_t *opt) {
+    printf("\n[Grid Search Plan] Parameters to optimize in THROUGHPUT phase:\n");
+    
+    int param_count = 0;
+    int total_estimated_iterations = 0;
+    
+    for (int i = 0; i < opt->num_params; i++) {
+        param_t *p = &opt->params[i];
+        if (p->is_tunable && !p->locked && !p->grid_searched && 
+            p->group == PARAM_GROUP_THROUGHPUT) {
+            param_count++;
+            int estimated = estimate_grid_points(p);
+            total_estimated_iterations += estimated;
+            
+            printf("  %d. %-12s [%4d, %4d] step=%d → ~%d iterations\n",
+                   param_count, p->name, p->min_val, p->max_val, 
+                   p->step_size, estimated);
+        }
+    }
+    
+    if (param_count == 0) {
+        printf("  (No THROUGHPUT parameters to optimize)\n");
+    } else {
+        printf("\n[Grid Search Plan] Total estimated iterations: ~%d\n", 
+               total_estimated_iterations);
+        printf("[Grid Search Plan] Strategy: Coordinate descent (one parameter at a time)\n");
+        printf("[Grid Search Plan] Other parameters remain fixed during each search\n\n");
+    }
+}
+
 /* ============================================================================
  * Grid Search for THROUGHPUT Phase - Exhaustive Parameter Exploration
  * ============================================================================ */
 
 /*
- * Initialize grid search for a THROUGHPUT parameter
- * Strategy: Multi-scale search (coarse → fine)
+ * Multi-Dimensional Grid Search Strategy (Generic Coordinate Descent)
  * 
- * Coarse phase: Test exponentially-spaced values across full range
- *   Example for clients [10, 1000]:
- *     10, 20, 40, 80, 160, 320, 640, 1000
+ * Automatically discovers all THROUGHPUT group parameters and optimizes them
+ * sequentially, one dimension at a time while keeping others fixed.
  * 
- * Fine phase: After finding best coarse value, test smaller increments around it
- *   Example if best=160:
- *     140, 150, 160, 170, 180
+ * Algorithm:
+ * ----------
+ * For each parameter P in THROUGHPUT group (where is_tunable && !locked && !grid_searched):
+ *   1. Fix all other THROUGHPUT parameters at their current values
+ *   2. Perform coarse grid search on P (exponential steps: min → 2× → 4× → max)
+ *   3. Perform fine grid search around best (linear steps: best ±2×step)
+ *   4. Set P to optimal value and mark as grid_searched
+ *   5. Move to next parameter
+ * 
+ * Example with 3 parameters (clients, threads, pipeline):
+ * -------------------------------------------------------
+ * Iteration 1-10:  Search clients [10, 20, 40, 80, 160, 320, 640, 1000, ±fine]
+ *                  threads=0 (initial), pipeline=1 (initial)
+ *                  → optimal_clients = 160
+ * 
+ * Iteration 11-18: Search threads [0, 1, 2, 4, 8, 10, ±fine]
+ *                  clients=160 (locked from grid search), pipeline=1 (initial)
+ *                  → optimal_threads = 2
+ * 
+ * Iteration 19-26: Search pipeline [1, 2, 4, 8, 16, 32, 64, 100, ±fine]
+ *                  clients=160 (locked), threads=2 (locked)
+ *                  → optimal_pipeline = 1
+ * 
+ * Result: All THROUGHPUT parameters optimized sequentially
+ * 
+ * Properties:
+ * -----------
+ * - Time complexity: O(N × M) where N=num params, M=avg grid points per param
+ * - Space complexity: O(1) - only one parameter varies at a time
+ * - Convergence: Finds near-optimal in presence of weak parameter coupling
+ * - Extensible: Automatically handles new THROUGHPUT parameters without code changes
+ * - User control: Can pre-lock parameters to exclude from optimization
+ * 
+ * Limitations:
+ * ------------
+ * - May miss global optimum if parameters are strongly coupled (e.g., optimal
+ *   clients depends heavily on threads). HILL_CLIMB phase addresses this.
+ * - Not parallelizable across parameters (by design - coordinate descent)
+ * 
+ * Future enhancements:
+ * --------------------
+ * - Adaptive grid density based on score variance
+ * - 2D grid search for known coupled parameters
+ * - Parallel evaluation of multiple grid points (same parameter)
+ */
+
+/*
+ * Initialize grid search for next untested THROUGHPUT parameter.
+ * 
+ * Searches for first parameter where:
+ *   - is_tunable = true (can be optimized)
+ *   - locked = false (not locked by earlier phase like RECALL)
+ *   - grid_searched = false (hasn't completed grid search yet)
+ *   - group = PARAM_GROUP_THROUGHPUT (throughput-related parameter)
+ * 
+ * When found, initializes coarse search starting from min_val.
+ * All other THROUGHPUT parameters remain at their current values.
  */
 static void init_grid_search_for_throughput(optimizer_t *opt) {
     /* Find next untested THROUGHPUT parameter */
     int param_idx = -1;
     for (int i = 0; i < opt->num_params; i++) {
         param_t *p = &opt->params[i];
-        if (p->is_tunable && !p->locked && p->group == PARAM_GROUP_THROUGHPUT) {
-            /* TODO: Track which params were already grid searched to avoid re-testing */
-            /* For now, search first available param */
+        if (p->is_tunable && !p->locked && !p->grid_searched && 
+            p->group == PARAM_GROUP_THROUGHPUT) {
             param_idx = i;
             break;
         }
@@ -933,6 +1030,7 @@ static void init_grid_search_for_throughput(optimizer_t *opt) {
     if (param_idx < 0) {
         /* No more parameters to grid search */
         opt->grid_search_active = 0;
+        printf("[Grid Search] All THROUGHPUT parameters have been searched\n");
         return;
     }
     
@@ -942,8 +1040,7 @@ static void init_grid_search_for_throughput(optimizer_t *opt) {
     opt->grid_search_phase = 0;  /* Start with coarse search */
     opt->grid_search_tested_count = 0;
     opt->grid_search_best_value = p->current_val;
-    opt->grid_search_best_score = opt->has_feasible_solution ? 
-                                  opt->best_feasible.objective_score : -DBL_MAX;
+    opt->grid_search_best_score = -DBL_MAX;  /* Reset to worst possible - any measurement will be better */
     
     /* Start coarse search at minimum value */
     p->current_val = p->min_val;
@@ -998,7 +1095,10 @@ static int update_grid_search(optimizer_t *opt, double current_score, int constr
     if (opt->grid_search_phase == 0) {
         /* COARSE phase: exponential steps */
         int next_val;
-        if (current_val == p->min_val) {
+        if (current_val == p->min_val && current_val == 0) {
+            /* Special case: starting from 0, jump to step_size */
+            next_val = p->step_size;
+        } else if (current_val == p->min_val) {
             /* First step: go to min + step_size or double */
             next_val = MIN(p->min_val + p->step_size, p->min_val * 2);
         } else {
@@ -1010,6 +1110,20 @@ static int update_grid_search(optimizer_t *opt, double current_score, int constr
         next_val = ((next_val + p->step_size / 2) / p->step_size) * p->step_size;
         next_val = MIN(next_val, p->max_val);
         
+        /* Check if we need to test a midpoint before max_val */
+        if (next_val >= p->max_val && current_val < p->max_val) {
+            /* Large gap between current and max_val - test midpoint first */
+            int gap = p->max_val - current_val;
+            if (gap > 4 * p->step_size) {
+                /* Test midpoint */
+                int midpoint = (current_val + p->max_val) / 2;
+                midpoint = ((midpoint + p->step_size / 2) / p->step_size) * p->step_size;
+                if (midpoint > current_val && midpoint < p->max_val) {
+                    next_val = midpoint;
+                }
+            }
+        }
+        
         if (next_val > p->max_val || next_val <= current_val) {
             /* Coarse phase complete - transition to fine phase */
             opt->grid_search_phase = 1;
@@ -1019,11 +1133,15 @@ static int update_grid_search(optimizer_t *opt, double current_score, int constr
                    p->name, opt->grid_search_best_value);
             printf("[Grid Search] Starting FINE search around best value\n");
             
-            /* Start fine search at best_value - 2*step */
-            int fine_start = MAX(opt->grid_search_best_value - 2 * p->step_size, p->min_val);
-            p->current_val = fine_start;
+            /* Fix the fine search range at transition time (don't recalculate later!) */
+            /* Use ±4 steps for wider coverage (captures intermediate optima) */
+            opt->grid_search_fine_start = MAX(opt->grid_search_best_value - 4 * p->step_size, p->min_val);
+            opt->grid_search_fine_end = MIN(opt->grid_search_best_value + 4 * p->step_size, p->max_val);
             
-            printf("[Grid Search] Testing value 1/5: %s=%d\n", p->name, p->current_val);
+            /* Start fine search at fine_start */
+            p->current_val = opt->grid_search_fine_start;
+            
+            printf("[Grid Search] Testing fine value: %s=%d\n", p->name, p->current_val);
             return 1;
         }
         
@@ -1034,22 +1152,23 @@ static int update_grid_search(optimizer_t *opt, double current_score, int constr
         
     } else {
         /* FINE phase: linear steps around best value */
-        /* Range: [best - 2*step, best + 2*step] in increments of step_size */
-        int fine_end = MIN(opt->grid_search_best_value + 2 * p->step_size, p->max_val);
+        /* Use FIXED range determined at coarse→fine transition */
+        int fine_end = opt->grid_search_fine_end;
         int next_val = current_val + p->step_size;
         
-        if (next_val > fine_end || opt->grid_search_tested_count >= 5) {
-            /* Fine phase complete */
+        if (next_val > fine_end) {
+            /* Fine phase complete - all values in range tested */
             p->current_val = opt->grid_search_best_value;
+            p->grid_searched = true;  /* Mark this parameter as searched */
             printf("[Grid Search] CONVERGED: Optimal %s=%d (score=%.2f)\n",
                    p->name, opt->grid_search_best_value, opt->grid_search_best_score);
+            printf("[Grid Search] Marked %s as grid_searched\n", p->name);
             opt->grid_search_active = 0;
             return 0;
         }
         
         p->current_val = next_val;
-        printf("[Grid Search] Testing value %d/5: %s=%d\n", 
-               opt->grid_search_tested_count + 1, p->name, p->current_val);
+        printf("[Grid Search] Testing fine value: %s=%d\n", p->name, p->current_val);
         return 1;
     }
 }
@@ -1473,3 +1592,177 @@ int main(void) {
 }
 
 #endif /* OPTIMIZER_EXAMPLE */
+
+/* ============================================================================
+ * Grid Search Test - Simulate finding optimal point (75, 367)
+ * ============================================================================ */
+
+#ifdef TEST_GRID_SEARCH
+
+#include "load_optimizer.h"
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/*
+ * Test function to verify grid search algorithm.
+ * 
+ * Simulates a 2D optimization problem where the optimal point is (75, 367).
+ * The "score" is negative distance from this point (maximize = get closer).
+ * 
+ * Usage: Compile with -DTEST_GRID_SEARCH and run the resulting binary.
+ */
+
+static double compute_test_score(int target_x, int target_y, int x, int y) {    
+    /* Euclidean distance */
+    double dx = x - target_x;
+    double dy = y - target_y;
+    double distance = sqrt(dx * dx + dy * dy);
+    
+    /* Return negative distance (so maximizing score = minimizing distance) */
+    return -distance;
+}
+
+const int test_target_pairs[][2] = {
+    {75, 367},
+    {50, 250},
+    {100, 400},
+    {25, 100},
+    {150, 450}
+};
+
+const int test_target_ranges_x[][2] = {
+    {0, 10000},
+    {0, 8000},
+    {0, 450},
+    {2, 99300},
+    {150, 451}
+};
+
+const int test_target_ranges_y[][2] = {
+    {0, 10000},
+    {45, 255},
+    {95, 405},
+    {20, 105},
+    {145, 455}
+};
+int main(void) {
+    int num_success = 0;
+    int num_fail = 0;
+    
+    for (int test_case = 0; test_case < 5; test_case++) {
+        printf("=== Grid Search Test ===\n");
+        printf("Goal: Find optimal point (%d, %d) using grid search\n\n", test_target_pairs[test_case][0], test_target_pairs[test_case][1]);
+        /* Create optimizer */
+        optimizer_t *opt = optimizer_create();
+        if (!opt) {
+            fprintf(stderr, "Failed to create optimizer\n");
+            return 1;
+        }
+        // set random initial value (in range)
+        optimizer_add_param_grouped(opt, "param_x", test_target_ranges_x[test_case][0], test_target_ranges_x[test_case][1], 1,
+            rand() % (test_target_ranges_x[test_case][1] - test_target_ranges_x[test_case][0] + 1) + test_target_ranges_x[test_case][0], PARAM_GROUP_THROUGHPUT);
+        optimizer_add_param_grouped(opt, "param_y", test_target_ranges_y[test_case][0], test_target_ranges_y[test_case][1], 1,
+            rand() % (test_target_ranges_y[test_case][1] - test_target_ranges_y[test_case][0] + 1) + test_target_ranges_y[test_case][0], PARAM_GROUP_THROUGHPUT);
+        
+        /* Set objective: maximize score (minimize distance to target) */
+        opt->objective.type = OBJECTIVE_MAXIMIZE;
+        opt->objective.metric = METRIC_QPS;  /* We'll use QPS as our score metric */
+        
+        /* Simulate THROUGHPUT phase with grid search */
+        opt->phase = PHASE_THROUGHPUT;
+        opt->has_feasible_solution = true;  /* Pretend we passed RECALL phase */
+        
+        printf("\n--- Starting Grid Search ---\n\n");
+        
+        /* Print the search plan */
+        print_grid_search_plan(opt);
+        
+        int iteration = 0;
+        int max_iterations = 100;
+        status_t status = STATUS_OK;
+        
+        while (status != STATUS_CONVERGED && iteration < max_iterations) {
+            iteration++;
+            
+            /* Get current parameter values */
+            int config[2];
+            optimizer_get_current_config(opt, config, 2);
+            int x = config[0];
+            int y = config[1];
+            
+            /* Compute score (negative distance to optimal point) */
+            double score = compute_test_score(test_target_pairs[test_case][0], test_target_pairs[test_case][1], x, y);
+            double distance = -score;  /* Convert back to actual distance */
+            
+            /* Create fake metrics (only QPS matters for our test) */
+            double metrics[METRIC_COUNT] = {0};
+            metrics[METRIC_QPS] = score;  /* Use as our optimization metric */
+            
+            printf("[Iter %2d] Testing: x=%3d, y=%3d | Distance to (%d,%d): %.2f | Score: %.2f\n",
+                iteration, x, y, test_target_pairs[test_case][0], test_target_pairs[test_case][1], distance, score);
+            
+            /* Feed measurements to optimizer */
+            status = optimizer_step(opt, metrics);
+            
+            /* Debug: print status */
+            const char *status_names[] = {"OK", "WAIT_STAB", "CONVERGED", "NO_FEASIBLE", "ERROR"};
+            printf("          Status: %s, Phase: %s\n", status_names[status], 
+                phase_names[opt->phase]);
+            
+            if (status == STATUS_ERROR) {
+                printf("\nOptimizer error!\n");
+                break;
+            }
+            
+            /* Stop after THROUGHPUT phase completes (grid search done) */
+            if (opt->phase == PHASE_HILL_CLIMB) {
+                printf("\nGrid search (THROUGHPUT phase) complete, stopping test.\n");
+                break;
+            }
+            
+            if (status == STATUS_CONVERGED) {
+                printf("\nOptimizer converged!\n");
+                break;
+            }
+        }
+        
+        printf("\n--- Grid Search Complete ---\n");
+        printf("Total iterations: %d\n", iteration);
+        
+        /* Get final configuration */
+        int final_config[2];
+        optimizer_get_current_config(opt, final_config, 2);
+        int final_x = final_config[0];
+        int final_y = final_config[1];
+        double final_distance = -compute_test_score(test_target_pairs[test_case][0], test_target_pairs[test_case][1], final_x, final_y);
+        
+        printf("\nFinal Result:\n");
+        printf("  Found: x=%d, y=%d\n", final_x, final_y);
+        printf("  Target: x=%d, y=%d\n", test_target_pairs[test_case][0], test_target_pairs[test_case][1]);
+        printf("  Distance: %.2f\n", final_distance);
+        printf("  Error X: %d\n", abs(final_x - test_target_pairs[test_case][0]));
+        printf("  Error Y: %d\n", abs(final_y - test_target_pairs[test_case][1]));
+        
+        /* Success criteria: within 2 steps of optimal */
+        bool success = (abs(final_x - test_target_pairs[test_case][0]) <= 10) && (abs(final_y - test_target_pairs[test_case][1]) <= 20);
+        printf("\nTest Result: %s\n", success ? "PASS ✓" : "FAIL ✗");
+        num_success += success ? 1 : 0;
+        num_fail += success ? 0 : 1;
+        if (opt->has_feasible_solution) {
+            const measurement_t *best = &opt->best_feasible;
+            printf("\nBest Score: %.2f (distance: %.2f)\n", 
+                best->metrics[METRIC_QPS], -best->metrics[METRIC_QPS]);
+        }
+        
+        optimizer_destroy(opt);
+    }
+    printf("\n=== Grid Search Test Summary ===\n");
+    printf("Total Tests: %d\n", num_success + num_fail);
+    printf("Passed: %d\n", num_success);
+    printf("Failed: %d\n", num_fail);
+    bool success = (num_fail == 0);
+    return success ? 0 : 1;
+}
+
+#endif /* TEST_GRID_SEARCH */

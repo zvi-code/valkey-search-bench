@@ -11,7 +11,8 @@ This package extracts the vector search benchmarking capabilities from the Valke
 - **Cluster Support**: Parallel cluster scanning with vector ID to cluster tag mapping
 - **Recall Validation**: Accurate recall measurement with missing neighbor reconstruction
 - **Performance Testing**: Throughput (QPS), latency (p50/p99), and recall analysis
-- **Parameter Tuning**: ef_search parameter sweep and optimization
+- **Adaptive Optimization**: Automatic parameter tuning with multi-phase optimization (binary search + grid search)
+- **Parameter Tuning**: ef_search parameter sweep and exhaustive exploration
 
 ## Quick Start
 
@@ -66,11 +67,32 @@ python scripts/conversion/download_any_dataset.py COHERE 1000000
   -n 10000 -c 10 --threads 10
 ```
 
+### Adaptive Optimization (Automatic Parameter Tuning)
+
+```bash
+# Automatically find optimal configuration
+./bin/valkey-benchmark --optimize \
+  --optimize-objective "maximize:qps" \
+  --optimize-constraint "recall_avg:gt:0.95" \
+  -h localhost --cluster --rfr no \
+  --dataset cohere-medium-1m.bin \
+  -t vec-query --search --vector-dim 768 \
+  --search-name cohere_1m --search-prefix zvec_: \
+  --optimize-csv results.csv
+```
+
+**What the optimizer does:**
+1. **Binary search** for minimal `ef_search` satisfying recall constraints (~7 iterations)
+2. **Grid search** for optimal `clients` and `threads` for max QPS (~20 iterations)
+3. **Fine-tuning** with gradient descent for final adjustments
+4. Exports complete optimization history to CSV
+
 ## Documentation
 
 - **[Complete Guide](docs/VECTORDB_BENCH_COMPLETE_GUIDE.md)** - Full dataset pipeline walkthrough
 - **[Testing Guide](docs/DATASET_TESTING_GUIDE.md)** - Testing workflows and examples
 - **[ef_search Tuning](docs/EF_SEARCH_TESTING_GUIDE.md)** - Parameter optimization
+- **[Grid Search Algorithm](docs/GRID_SEARCH_IMPLEMENTATION.md)** - Exhaustive parameter exploration
 - **[Dataset Catalog](docs/VECTORDB_DATASETS.md)** - Available datasets and sizes
 - **[Architecture](docs/BENCHMARK_MODULES.md)** - Module design and organization
 
@@ -100,9 +122,67 @@ python scripts/conversion/download_any_dataset.py COHERE 1000000
 ✅ Cluster mode support with read-from-replica options  
 ✅ Parallel cluster scanning for recall validation  
 ✅ Vector ID to cluster tag mapping for missing neighbor reconstruction  
+✅ **Adaptive load optimizer with multi-phase optimization**  
+✅ **Binary search for recall optimization (ef_search tuning)**  
+✅ **Grid search for throughput optimization (clients/threads tuning)**  
 ✅ HDR histogram for accurate latency percentiles  
 ✅ Progress bars and real-time monitoring  
 ✅ Comprehensive result analysis and CSV export  
+
+## Adaptive Load Optimizer
+
+The optimizer automatically tunes benchmark parameters to achieve your performance goals:
+
+### Optimization Phases
+
+1. **INIT** - Collect baseline measurements
+2. **FEASIBILITY** - Find any configuration that works
+3. **RECALL** - Binary search for minimal `ef_search` satisfying recall constraints
+4. **THROUGHPUT** - Grid search for optimal `clients` and `threads`
+   - Coarse phase: Exponential steps (10 → 20 → 40 → 80 → 160...)
+   - Fine phase: Linear steps around best value (±2 steps)
+5. **HILL_CLIMB** - Gradient descent for multi-parameter fine-tuning
+6. **REFINEMENT** - Coordinate descent for final adjustments
+
+### Usage Examples
+
+```bash
+# Maximize QPS while maintaining recall ≥ 0.95
+./bin/valkey-benchmark --optimize \
+  --optimize-objective "maximize:qps" \
+  --optimize-constraint "recall_avg:gt:0.95" \
+  -h localhost --cluster --dataset cohere-medium-1m.bin \
+  -t vec-query --search --vector-dim 768
+
+# Minimize p99 latency while maintaining recall ≥ 0.90
+./bin/valkey-benchmark --optimize \
+  --optimize-objective "minimize:p99_latency" \
+  --optimize-constraint "recall_avg:gt:0.90" \
+  -h localhost --cluster --dataset cohere-medium-1m.bin \
+  -t vec-query --search --vector-dim 768
+
+# Multiple constraints
+./bin/valkey-benchmark --optimize \
+  --optimize-objective "maximize:qps" \
+  --optimize-constraint "recall_avg:gt:0.95" \
+  --optimize-constraint "p99_latency:lt:10.0" \
+  --optimize-csv optimization_results.csv \
+  -h localhost --cluster --dataset cohere-medium-1m.bin \
+  -t vec-query --search --vector-dim 768
+```
+
+### Available Metrics
+
+**Objectives** (maximize or minimize):
+- `qps` - Queries per second
+- `avg_latency`, `p50_latency`, `p90_latency`, `p95_latency`, `p99_latency`, `max_latency`
+- `recall_avg`, `recall_min`, `recall_max`
+
+**Constraints** (gt or lt):
+- Same as objectives
+- Example: `recall_avg:gt:0.95` means "recall must be greater than 0.95"
+
+See [docs/GRID_SEARCH_IMPLEMENTATION.md](docs/GRID_SEARCH_IMPLEMENTATION.md) for algorithm details.  
 
 ## Project Structure
 

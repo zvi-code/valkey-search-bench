@@ -149,6 +149,7 @@ typedef struct {
     int last_update_iter;    /* Iteration number when parameter was last changed */
     bool is_tunable;         /* False if parameter is constraint-only (not optimized) */
     bool locked;             /* True if parameter is locked after its optimization phase */
+    bool grid_searched;      /* True if parameter has completed grid search in THROUGHPUT phase */
     param_group_t group;     /* RECALL/THROUGHPUT/MIXED - determines optimization phase */
 } param_t;
 
@@ -236,6 +237,8 @@ typedef struct {
     int grid_search_tested_count; /* Number of values tested so far */
     int grid_search_best_value;   /* Best value found so far */
     double grid_search_best_score; /* Best score found so far */
+    int grid_search_fine_start;   /* Start of fine search range (fixed at phase transition) */
+    int grid_search_fine_end;     /* End of fine search range (fixed at phase transition) */
     
     /* Valkey benchmark integration */
     void *benchmark_context;   /* Opaque pointer to benchmark config */
