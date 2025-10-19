@@ -32,7 +32,7 @@
 #include "dataset_api.h"
 #include "vector-id-mapping.h"
 #include "fmacros.h"
-
+#include "load_optimizer.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -423,6 +423,16 @@ static struct config {
     uint32_t dataset_num_neighbors; /* Ground truth k */
     _Atomic uint64_t dataset_prefill_counter;  /* Insert counter */
     _Atomic uint64_t dataset_query_counter;    /* Query counter */
+    
+    /* Load Optimizer configuration */
+    int optimize_enabled;         /* Enable adaptive optimization */
+    optimizer_t *optimizer;       /* Optimizer instance */
+    sds optimize_objective;       /* e.g., "maximize:qps" or "minimize:p99_latency" */
+    sds *optimize_constraints;    /* Array of constraint strings */
+    int num_optimize_constraints; /* Number of constraints */
+    sds optimize_csv_file;        /* CSV output file for optimization results */
+    int optimize_max_iterations;  /* Max optimization iterations */
+    int optimize_min_requests;    /* Min requests per benchmark run */
 } config;
 
 /* Recall statistics for dataset mode */
@@ -480,6 +490,167 @@ static void updateRecallStats(float recall) {
 
 static void updateRecallStatsExt(float recall) {
     updateRecallStatsInt(&dataset_recall_stats_ext, recall);
+}
+
+/* Reset statistics for clean benchmark run (used by optimizer) */
+static void resetBenchmarkStats(void) {
+    /* Reset request counters */
+    atomic_store_explicit(&config.requests_issued, 0, memory_order_relaxed);
+    atomic_store_explicit(&config.requests_finished, 0, memory_order_relaxed);
+    atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
+    config.last_printed_bytes = 0;
+    config.totlatency = 0;
+    
+    /* Reset recall statistics */
+    memset(&dataset_recall_stats, 0, sizeof(recallStats));
+    memset(&dataset_recall_stats_ext, 0, sizeof(recallStats));
+    dataset_recall_stats.min_recall = 1.0;
+    dataset_recall_stats_ext.min_recall = 1.0;
+    
+    /* Reset dataset counters if in dataset mode */
+    if (config.use_dataset) {
+        atomic_store_explicit(&config.dataset_prefill_counter, 0, memory_order_relaxed);
+        atomic_store_explicit(&config.dataset_query_counter, 0, memory_order_relaxed);
+    }
+    
+    /* Reset histograms */
+    if (config.latency_histogram) {
+        hdr_reset(config.latency_histogram);
+    }
+    if (config.current_sec_latency_histogram) {
+        hdr_reset(config.current_sec_latency_histogram);
+    }
+}
+
+/* Parse metric name string to metric_t enum */
+static metric_t parseMetricName(const char *name) {
+    if (!strcasecmp(name, "qps")) return METRIC_QPS;
+    if (!strcasecmp(name, "avg_latency")) return METRIC_AVG_LATENCY;
+    if (!strcasecmp(name, "p50_latency")) return METRIC_P50_LATENCY;
+    if (!strcasecmp(name, "p90_latency")) return METRIC_P90_LATENCY;
+    if (!strcasecmp(name, "p95_latency")) return METRIC_P95_LATENCY;
+    if (!strcasecmp(name, "p99_latency")) return METRIC_P99_LATENCY;
+    if (!strcasecmp(name, "max_latency")) return METRIC_MAX_LATENCY;
+    if (!strcasecmp(name, "min_latency")) return METRIC_MIN_LATENCY;
+    if (!strcasecmp(name, "recall_avg")) return METRIC_RECALL_AVG;
+    if (!strcasecmp(name, "recall_min")) return METRIC_RECALL_MIN;
+    if (!strcasecmp(name, "recall_max")) return METRIC_RECALL_MAX;
+    if (!strcasecmp(name, "recall_perfect_pct")) return METRIC_RECALL_PERFECT_PCT;
+    if (!strcasecmp(name, "recall_zero_pct")) return METRIC_RECALL_ZERO_PCT;
+    
+    fprintf(stderr, "Unknown metric name: %s\n", name);
+    exit(1);
+}
+
+/* Parse and set optimization objective: "maximize:qps" or "minimize:p99_latency" */
+static void parseOptimizerObjective(optimizer_t *opt, const char *objective_str) {
+    char *str_copy = strdup(objective_str);
+    char *colon = strchr(str_copy, ':');
+    
+    if (!colon) {
+        fprintf(stderr, "Invalid objective format: %s (expected 'maximize:metric' or 'minimize:metric')\n", objective_str);
+        exit(1);
+    }
+    
+    *colon = '\0';
+    const char *type_str = str_copy;
+    const char *metric_str = colon + 1;
+    
+    objective_type_t type;
+    if (!strcasecmp(type_str, "maximize")) {
+        type = OBJECTIVE_MAXIMIZE;
+    } else if (!strcasecmp(type_str, "minimize")) {
+        type = OBJECTIVE_MINIMIZE;
+    } else {
+        fprintf(stderr, "Invalid objective type: %s (expected 'maximize' or 'minimize')\n", type_str);
+        exit(1);
+    }
+    
+    metric_t metric = parseMetricName(metric_str);
+    optimizer_set_objective(opt, metric, type);
+    
+    free(str_copy);
+}
+
+/* Parse and add constraint: "p99_latency:lt:5.0" or "qps:gt:10000" */
+static void parseOptimizerConstraint(optimizer_t *opt, const char *constraint_str) {
+    char *str_copy = strdup(constraint_str);
+    char *parts[3];
+    int part_count = 0;
+    
+    char *token = strtok(str_copy, ":");
+    while (token && part_count < 3) {
+        parts[part_count++] = token;
+        token = strtok(NULL, ":");
+    }
+    
+    if (part_count != 3) {
+        fprintf(stderr, "Invalid constraint format: %s (expected 'metric:op:value')\n", constraint_str);
+        exit(1);
+    }
+    
+    metric_t metric = parseMetricName(parts[0]);
+    
+    constraint_type_t type;
+    if (!strcasecmp(parts[1], "lt") || !strcasecmp(parts[1], "<")) {
+        type = CONSTRAINT_LESS_THAN;
+    } else if (!strcasecmp(parts[1], "gt") || !strcasecmp(parts[1], ">")) {
+        type = CONSTRAINT_GREATER_THAN;
+    } else {
+        fprintf(stderr, "Invalid constraint operator: %s (expected 'lt' or 'gt')\n", parts[1]);
+        exit(1);
+    }
+    
+    double threshold = atof(parts[2]);
+    optimizer_add_constraint(opt, metric, type, threshold);
+    
+    free(str_copy);
+}
+
+/* Collect current metrics for optimizer */
+static void collectOptimizerMetrics(double metrics[METRIC_COUNT]) {
+    /* Calculate QPS */
+    if (config.totlatency > 0) {
+        metrics[METRIC_QPS] = (double)config.requests_finished / ((double)config.totlatency / 1000.0);
+    } else {
+        metrics[METRIC_QPS] = 0.0;
+    }
+    
+    /* Collect latency metrics from histogram */
+    if (config.latency_histogram && config.latency_histogram->total_count > 0) {
+        metrics[METRIC_AVG_LATENCY] = hdr_mean(config.latency_histogram) / 1000.0;
+        metrics[METRIC_MIN_LATENCY] = ((double)hdr_min(config.latency_histogram)) / 1000.0;
+        metrics[METRIC_P50_LATENCY] = hdr_value_at_percentile(config.latency_histogram, 50.0) / 1000.0;
+        metrics[METRIC_P90_LATENCY] = hdr_value_at_percentile(config.latency_histogram, 90.0) / 1000.0;
+        metrics[METRIC_P95_LATENCY] = hdr_value_at_percentile(config.latency_histogram, 95.0) / 1000.0;
+        metrics[METRIC_P99_LATENCY] = hdr_value_at_percentile(config.latency_histogram, 99.0) / 1000.0;
+        metrics[METRIC_MAX_LATENCY] = ((double)hdr_max(config.latency_histogram)) / 1000.0;
+    } else {
+        metrics[METRIC_AVG_LATENCY] = 0.0;
+        metrics[METRIC_MIN_LATENCY] = 0.0;
+        metrics[METRIC_P50_LATENCY] = 0.0;
+        metrics[METRIC_P90_LATENCY] = 0.0;
+        metrics[METRIC_P95_LATENCY] = 0.0;
+        metrics[METRIC_P99_LATENCY] = 0.0;
+        metrics[METRIC_MAX_LATENCY] = 0.0;
+    }
+    
+    /* Collect recall metrics (thread-safe, already locked during updates) */
+    if (config.use_dataset && dataset_recall_stats.total_queries > 0) {
+        metrics[METRIC_RECALL_AVG] = dataset_recall_stats.sum_recall / dataset_recall_stats.total_queries;
+        metrics[METRIC_RECALL_MIN] = dataset_recall_stats.min_recall;
+        metrics[METRIC_RECALL_MAX] = dataset_recall_stats.max_recall;
+        metrics[METRIC_RECALL_PERFECT_PCT] = 
+            (double)dataset_recall_stats.perfect_recalls * 100.0 / dataset_recall_stats.total_queries;
+        metrics[METRIC_RECALL_ZERO_PCT] = 
+            (double)dataset_recall_stats.zero_recalls * 100.0 / dataset_recall_stats.total_queries;
+    } else {
+        metrics[METRIC_RECALL_AVG] = 0.0;
+        metrics[METRIC_RECALL_MIN] = 0.0;
+        metrics[METRIC_RECALL_MAX] = 0.0;
+        metrics[METRIC_RECALL_PERFECT_PCT] = 0.0;
+        metrics[METRIC_RECALL_ZERO_PCT] = 0.0;
+    }
 }
 
 // create printf wrapper function that prints inder mutex lock
@@ -3875,6 +4046,27 @@ int parseOptions(int argc, char **argv) {
             sdsfree(config.dataset_name);
             config.dataset_name = sdsnew(argv[++i]);
             config.use_dataset = 1;
+        } else if (!strcmp(argv[i], "--optimize")) {
+            config.optimize_enabled = 1;
+        } else if (!strcmp(argv[i], "--optimize-objective")) {
+            if (lastarg) goto invalid;
+            if (config.optimize_objective) sdsfree(config.optimize_objective);
+            config.optimize_objective = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--optimize-constraint")) {
+            if (lastarg) goto invalid;
+            config.optimize_constraints = realloc(config.optimize_constraints,
+                                                 (config.num_optimize_constraints + 1) * sizeof(sds));
+            config.optimize_constraints[config.num_optimize_constraints++] = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--optimize-csv")) {
+            if (lastarg) goto invalid;
+            if (config.optimize_csv_file) sdsfree(config.optimize_csv_file);
+            config.optimize_csv_file = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--optimize-max-iterations")) {
+            if (lastarg) goto invalid;
+            config.optimize_max_iterations = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--optimize-min-requests")) {
+            if (lastarg) goto invalid;
+            config.optimize_min_requests = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--search-print-results")) {
             config.print_search_results = 1;
         } else if (!strcmp(argv[i], "--search-prefix")) {
@@ -4078,7 +4270,30 @@ usage:
         "                    Set tag filter pattern for vec-query operations (e.g., 'category_*').\n"
         " --search-tags <distribution>\n"
         "                    Comma-separated tag:percentage pairs for vec-insert operations.\n"
-        "                    Example: 'fruits:8.5,vegetables:7.2,dairy:32.1,meat:52.2'\n";
+        "                    Example: 'fruits:8.5,vegetables:7.2,dairy:32.1,meat:52.2'\n"
+        " --dataset <name>   Use a precomputed dataset for vector operations.\n"
+        "                    Dataset must be in binary format (.bin extension).\n"
+        " --dataset-path <path> Specify the full path to the dataset file.\n"
+        "\n"
+        "Optimizer Options:\n"
+        " --optimize         Enable adaptive load optimization. Automatically adjusts\n"
+        "                    benchmark parameters to achieve optimization goals.\n"
+        " --optimize-objective <spec>\n"
+        "                    Set optimization objective. Format: 'maximize:metric' or 'minimize:metric'\n"
+        "                    Available metrics: qps, avg_latency, p50_latency, p90_latency,\n"
+        "                    p95_latency, p99_latency, max_latency, recall_avg, recall_min, recall_max\n"
+        "                    Example: 'maximize:qps' or 'minimize:p99_latency'\n"
+        " --optimize-constraint <spec>\n"
+        "                    Add optimization constraint. Format: 'metric:op:value'\n"
+        "                    Operators: 'lt' (<) or 'gt' (>)\n"
+        "                    Example: 'p99_latency:lt:5.0' or 'recall_avg:gt:0.90'\n"
+        "                    Can be specified multiple times for multiple constraints.\n"
+        " --optimize-csv <file>\n"
+        "                    Output optimization results to CSV file.\n"
+        " --optimize-max-iterations <num>\n"
+        "                    Maximum number of optimization iterations (default 50).\n"
+        " --optimize-min-requests <num>\n"
+        "                    Minimum requests per benchmark run during optimization (default 1000).\n";
     printf(
         "%s%s%s%s%s%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
         "Usage: valkey-benchmark [OPTIONS] [--] [COMMAND ARGS...]\n\n"
@@ -4375,6 +4590,17 @@ int main(int argc, char **argv) {
     config.resp3 = 0;
     resetPlaceholders();
     setDefaultSearchConfig();
+    
+    /* Initialize optimizer defaults */
+    config.optimize_enabled = 0;
+    config.optimizer = NULL;
+    config.optimize_objective = NULL;
+    config.optimize_constraints = NULL;
+    config.num_optimize_constraints = 0;
+    config.optimize_csv_file = NULL;
+    config.optimize_max_iterations = 50;
+    config.optimize_min_requests = 1000;
+    
     i = parseOptions(argc, argv);
     argc -= i;
     argv += i;
@@ -4709,6 +4935,196 @@ int main(int argc, char **argv) {
         }
     }
     
+    /* Initialize optimizer if enabled */
+    if (config.optimize_enabled) {
+        if (!config.optimize_objective) {
+            fprintf(stderr, "Error: --optimize requires --optimize-objective\n");
+            fprintf(stderr, "Example: --optimize-objective 'maximize:qps'\n");
+            exit(1);
+        }
+        
+        config.optimizer = optimizer_create();
+        if (!config.optimizer) {
+            fprintf(stderr, "Failed to create optimizer\n");
+            exit(1);
+        }
+        
+        /* Add tunable parameters with domain-aware grouping
+         * MIXED group: ef_search (affects recall AND latency/throughput tradeoff)
+         * THROUGHPUT group: clients, threads, pipeline (affect QPS/latency, minimal recall impact)
+         */
+        optimizer_add_param_grouped(config.optimizer, "clients", 1, 1000, 10, config.numclients, PARAM_GROUP_THROUGHPUT);
+        optimizer_add_param_grouped(config.optimizer, "threads", 0, 32, 1, config.num_threads, PARAM_GROUP_THROUGHPUT);
+        // optimizer_add_param_grouped(config.optimizer, "pipeline", 1, 1000, 10, config.pipeline, PARAM_GROUP_THROUGHPUT);
+        optimizer_add_param_grouped(config.optimizer, "ef_search", 10, 1000, 10, config.search.ef_search, PARAM_GROUP_MIXED);
+        
+        /* Add RPS as constraint-only parameter if specified */
+        if (config.rps > 0) {
+            optimizer_add_constraint_param(config.optimizer, "rps", config.rps);
+            optimizer_add_constraint(config.optimizer, METRIC_QPS, CONSTRAINT_LESS_THAN, (double)config.rps);
+        }
+        
+        /* Parse and add user-specified constraints */
+        for (int j = 0; j < config.num_optimize_constraints; j++) {
+            parseOptimizerConstraint(config.optimizer, config.optimize_constraints[j]);
+        }
+        
+        /* Set optimization objective */
+        parseOptimizerObjective(config.optimizer, config.optimize_objective);
+        
+        /* Open CSV output file if specified */
+        FILE *csv_file = NULL;
+        if (config.optimize_csv_file) {
+            csv_file = fopen(config.optimize_csv_file, "w");
+            if (csv_file) {
+                optimizer_print_csv_header(csv_file);
+            } else {
+                fprintf(stderr, "Warning: Could not open CSV file: %s\n", config.optimize_csv_file);
+            }
+        }
+        
+        printf("\n=== Starting Adaptive Load Optimization ===\n");
+        printf("Objective: %s\n", config.optimize_objective);
+        printf("Constraints: %d specified\n", config.num_optimize_constraints);
+        printf("Max iterations: %d\n", config.optimize_max_iterations);
+        printf("Min requests per run: %d\n", config.optimize_min_requests);
+        printf("User requested requests: %d\n\n", config.requests);
+        
+        /* Save original config.requests to restore after optimization */
+        int original_requests = config.requests;
+        
+        status_t opt_status = STATUS_OK;
+        int iteration = 0;
+        
+        /* Optimization loop */
+        while (opt_status != STATUS_CONVERGED && iteration < config.optimize_max_iterations) {
+            iteration++;
+            
+            /* Get current configuration from optimizer */
+            int opt_config[3];
+            optimizer_get_current_config(config.optimizer, opt_config, 3);
+            
+            /* Apply configuration */
+            config.numclients = opt_config[0];
+            config.num_threads = opt_config[1];
+            // config.pipeline = opt_config[2];
+            config.search.ef_search = opt_config[2];
+            
+            /* Temporarily override requests with optimize_min_requests for faster iterations */
+            config.requests = config.optimize_min_requests;
+            
+            printf("\n--- Iteration %d ---\n", iteration);
+            printf("Config: clients=%d threads=%d pipeline=%d ef_search=%d requests=%d\n",
+                   config.numclients, config.num_threads, config.pipeline, config.search.ef_search, config.requests);
+            
+            /* Reset statistics for clean run */
+            resetBenchmarkStats();
+            
+            /* Run the benchmark (only vec-query for now) */
+            if (config.use_search && test_is_selected("vec-query")) {
+                size_t keyspacelen_before = config.keyspacelen;
+                if (config.use_dataset) {
+                    config.keyspacelen = (int)config.dataset_num_queries;
+                }
+                char *cmd_opt;
+                int len_opt = createSearchCmdTemplate(&cmd_opt);
+                benchmark("VEC-QUERY (optimizing)", cmd_opt, len_opt);
+                zfree(cmd_opt);
+                config.keyspacelen = keyspacelen_before;
+            } else {
+                fprintf(stderr, "Error: Optimizer currently requires --search and -t vec-query\n");
+                exit(1);
+            }
+            
+            /* Collect metrics */
+            double metrics[METRIC_COUNT];
+            collectOptimizerMetrics(metrics);
+            
+            /* Display current metrics */
+            printf("QPS: %.1f | P99: %.3fms | Recall: %.4f\n",
+                   metrics[METRIC_QPS], metrics[METRIC_P99_LATENCY], metrics[METRIC_RECALL_AVG]);
+            
+            /* Feed to optimizer */
+            opt_status = optimizer_step(config.optimizer, metrics);
+            
+            /* Write to CSV if enabled */
+            if (csv_file) {
+                optimizer_print_csv_row(config.optimizer, csv_file);
+                fflush(csv_file);
+            }
+            
+            if (opt_status == STATUS_WAIT_STABILIZATION) {
+                printf("Status: Waiting for stabilization...\n");
+            } else if (opt_status == STATUS_NO_FEASIBLE) {
+                printf("Status: No feasible solution found!\n");
+                break;
+            }
+        }
+        
+        /* Restore original requests value */
+        config.requests = original_requests;
+        
+        /* Print final results */
+        printf("\n=== Optimization Complete ===\n");
+        optimizer_print_status(config.optimizer, stdout);
+        
+        const measurement_t *best = optimizer_get_best_solution(config.optimizer);
+        if (best) {
+            printf("\n=== Best Configuration Found ===\n");
+            printf("QPS: %.1f\n", best->metrics[METRIC_QPS]);
+            printf("Avg Latency: %.3fms\n", best->metrics[METRIC_AVG_LATENCY]);
+            printf("P99 Latency: %.3fms\n", best->metrics[METRIC_P99_LATENCY]);
+            printf("Recall Avg: %.4f\n", best->metrics[METRIC_RECALL_AVG]);
+            printf("\nParameters:\n");
+            for (int j = 0; j < optimizer_get_param_count(config.optimizer); j++) {
+                printf("  %s = %d\n", optimizer_get_param_name(config.optimizer, j), 
+                       best->param_values[j]);
+            }
+            
+            /* Apply best configuration for final run if user requested full benchmark */
+            if (original_requests > config.optimize_min_requests) {
+                printf("\n=== Running Final Benchmark with Best Config ===\n");
+                printf("Using %d requests (user requested value)\n\n", original_requests);
+                
+                /* Apply best configuration */
+                config.numclients = best->param_values[0];
+                config.num_threads = best->param_values[1];
+                // config.pipeline = best->param_values[2];
+                config.search.ef_search = best->param_values[2];
+                
+                /* Reset statistics for final run */
+                resetBenchmarkStats();
+                
+                /* Run final benchmark with full request count */
+                if (config.use_search && test_is_selected("vec-query")) {
+                    size_t keyspacelen_before = config.keyspacelen;
+                    if (config.use_dataset) {
+                        config.keyspacelen = (int)config.dataset_num_queries;
+                    }
+                    char *cmd_final;
+                    int len_final = createSearchCmdTemplate(&cmd_final);
+                    benchmark("VEC-QUERY (final)", cmd_final, len_final);
+                    zfree(cmd_final);
+                    config.keyspacelen = keyspacelen_before;
+                }
+                
+                /* Print final benchmark results */
+                double final_metrics[METRIC_COUNT];
+                collectOptimizerMetrics(final_metrics);
+                printf("\n=== Final Benchmark Results ===\n");
+                printf("QPS: %.1f\n", final_metrics[METRIC_QPS]);
+                printf("Avg Latency: %.3fms\n", final_metrics[METRIC_AVG_LATENCY]);
+                printf("P99 Latency: %.3fms\n", final_metrics[METRIC_P99_LATENCY]);
+                printf("Recall Avg: %.4f\n", final_metrics[METRIC_RECALL_AVG]);
+            }
+        }
+        
+        if (csv_file) fclose(csv_file);
+        optimizer_destroy(config.optimizer);
+        
+        /* Exit after optimization - don't run normal benchmarks */
+        return 0;
+    }
     
     /* Run default benchmark suite. */
     data = zcalloc(config.datasize + 1);

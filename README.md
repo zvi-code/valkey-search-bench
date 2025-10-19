@@ -110,7 +110,6 @@ python scripts/conversion/download_any_dataset.py COHERE 1000000
 valkey-search-benchmark/
 ├── src/                    # Core C source files
 ├── utils/
-│   ├── vgenerator/        # Vector generation library
 │   └── datasets/          # Python dataset conversion toolkit
 ├── scripts/
 │   ├── conversion/        # Dataset download/conversion scripts

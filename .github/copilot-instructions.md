@@ -93,6 +93,52 @@ typedef struct {
 
 **Performance**: 1M+ keys/second scanning, scales with cluster node count.
 
+### 5. Adaptive Load Optimizer
+
+**Purpose**: Automatically tune benchmark parameters (clients, threads, ef_search) to maximize or minimize objectives while satisfying constraints.
+
+**Components**:
+- `src/load_optimizer.{c,h}` - Core optimization engine
+- Integrated into `src/valkey-benchmark.c`
+
+**Key Algorithmic Features**:
+1. **Binary Search for RECALL Phase**: Finds minimal ef_search satisfying recall constraints in ~7 iterations (vs gradient descent's many more)
+2. **Grid Search for THROUGHPUT Phase**: Exhaustively explores parameter space with coarse (exponential) + fine (linear) stages
+3. **Phased Optimization**: RECALL → THROUGHPUT → HILL_CLIMB → REFINEMENT for domain-aware convergence
+4. **Parameter Locking**: Preserves optimal values from earlier phases (e.g., ef_search locked after RECALL)
+
+**Optimization Phases**:
+```
+INIT (1 iter)
+  ↓
+FEASIBILITY (1-10 iters) - Find any working config
+  ↓
+RECALL (binary search, ~7 iters) - Optimize ef_search for recall constraints
+  Lock ef_search at minimal value
+  ↓
+THROUGHPUT (grid search, ~20 iters) - Exhaustively test clients/threads
+  Coarse: exponential steps (10→20→40→80...)
+  Fine: linear steps around best (±2*step_size)
+  ↓
+HILL_CLIMB (gradient descent, 5-10 iters) - Fine-tune all params together
+  ↓
+REFINEMENT (coordinate descent, 3-5 iters) - Final adjustments
+  ↓
+CONVERGED
+```
+
+**Usage Example**:
+```bash
+# Maximize QPS with recall ≥ 0.95
+./bin/valkey-benchmark --optimize \
+  --optimize-objective "maximize:qps" \
+  --optimize-constraint "recall_avg:gt:0.95" \
+  -h $HOST --cluster --dataset cohere-medium-1m.bin \
+  -t vec-query --search --vector-dim 768
+```
+
+**Documentation**: See `docs/GRID_SEARCH_IMPLEMENTATION.md` for detailed algorithm explanation.
+
 ## Critical Workflows
 
 ### Build System (CMake-based)
