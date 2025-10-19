@@ -13,9 +13,9 @@ if [ -z "${HOST:-}" ]; then
     echo "Set HOST to the Valkey/Redis cluster endpoint"
     exit 1
 fi
-BINARY_DIR="${VALKEY_HOME}/build-debug"
-BENCHM="${BINARY_DIR}/bin/valkey-benchmark"
-CLI="${BINARY_DIR}/bin/valkey-cli"
+BINARY_DIR="${VALKEY_HOME}/datasets"
+BENCHM="${VALKEY_HOME}/build-debug/bin/valkey-benchmark"
+CLI="valkey-cli"
 
 # Test parameters
 NUM_QUERIES="${NUM_QUERIES:-1000}"

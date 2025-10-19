@@ -44,8 +44,10 @@ static const char *dtype_names[] = {
 static int resolve_dataset_path(const char *name, char *out, size_t size) {
     const char *search_paths[] = {
         "%s",                           /* Direct path */
-        "./_datasets_prepared/%s.bin",  /* Local prepared */
-        "./utils/datasets/%s.bin",      /* Utils location */
+        "./datasets/%s",                /* Datasets directory (primary) */
+        "./datasets/%s.bin",            /* Datasets directory with .bin */
+        "./_datasets_prepared/%s.bin",  /* Local prepared (legacy) */
+        "./utils/datasets/%s.bin",      /* Utils location (legacy) */
         "/var/datasets/%s.bin",         /* System location */
         NULL
     };

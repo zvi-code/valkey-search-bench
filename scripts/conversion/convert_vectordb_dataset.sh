@@ -69,14 +69,16 @@ else
     echo ""
 fi
 
-# Step 3: Create symlink in build-debug
-BUILD_DEBUG="${VALKEY_HOME}/build-debug"
-SYMLINK="${BUILD_DEBUG}/${OUTPUT_NAME}.bin"
+# Step 3: Create symlink in datasets directory
+DATASETS_DIR="${VALKEY_HOME}/datasets"
+SYMLINK="${DATASETS_DIR}/${OUTPUT_NAME}.bin"
+
+mkdir -p "$DATASETS_DIR"
 
 if [ -L "$SYMLINK" ]; then
-    echo "✓ Symlink already exists in build-debug"
+    echo "✓ Symlink already exists in datasets directory"
 else
-    echo "Step 3: Creating symlink in build-debug..."
+    echo "Step 3: Creating symlink in datasets directory..."
     ln -sf "$BIN_FILE" "$SYMLINK"
     echo "✓ Created: ${SYMLINK} -> ${BIN_FILE}"
 fi
@@ -89,6 +91,6 @@ echo "Binary file: ${BIN_FILE}"
 echo "Symlink:     ${SYMLINK}"
 echo ""
 echo "You can now use this dataset with valkey-benchmark:"
-echo "  ./build-debug/valkey-benchmark --dataset ${OUTPUT_NAME}"
+echo "  ./bin/valkey-benchmark --dataset ${OUTPUT_NAME}.bin"
 echo ""
 ls -lh "$BIN_FILE"

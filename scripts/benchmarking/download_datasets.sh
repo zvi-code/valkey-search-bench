@@ -15,7 +15,7 @@ fi
 
 # Configuration
 DATASET_DIR="${VALKEY_HOME}/datasets"
-BINARY_DIR="${VALKEY_HOME}/build-debug"
+BINARY_DIR="${VALKEY_HOME}/datasets"
 PREPARE_SCRIPT="${VALKEY_HOME}/utils/datasets/prepare_binary.py"
 
 # Verify prepare script exists

@@ -29,7 +29,6 @@
  */
 
 #include "valkey-benchmark-utils.h"
-#include "valkey-benchmark-vgen.h"
 #include "dataset_api.h"
 #include "vector-id-mapping.h"
 #include "fmacros.h"
@@ -91,41 +90,30 @@ static long long nstime(void) {
 
 #define QUERY_VECTOR "query_vector"
 
-/* Vector generation placeholders 
- KEY - The key placeholder will follow with 4 bytes total key length. 
-    This will be used if need to replace the entire key.
- VECTOR - Vector placeholder indicates the last 4 floats of the vector in the command.
-    A replace will use the vector dimension from the index configuration and will 
-    override the entire vector with generated vector provided by vgen.
- */
-#define VGEN_KEY_PLACEHOLDER    "__v_gen_key_ph__"  // followed by 4 bytes total key length
-#define VGEN_VECTOR_PLACEHOLDER "__v_gen_vec_ph__"  // Exactly 16 characters for 2 floats
-#define VGEN_KEY_PLACEHOLDER_INDEX 12
-#define VGEN_VECTOR_PLACEHOLDER_INDEX 13
-
 #define DATASET_KEY_PLACEHOLDER    "__d_key_ph__"      // 12 bytes to fit 
-#define DATASET_VECTOR_PLACEHOLDER "__d_vec_ph____"   // 16 bytes like vgen
-#define DATASET_KEY_PLACEHOLDER_INDEX 14
-#define DATASET_VECTOR_PLACEHOLDER_INDEX 15
+#define DATASET_VECTOR_PLACEHOLDER "__d_vec_ph____"   // 16 bytes 
 
-#define DATASET_TAG_PLACEHOLDER "___tag_field____"   // 16 bytes like vgen
-#define DATASET_TAG_PLACEHOLDER_INDEX 16
+#define DATASET_KEY_PLACEHOLDER_INDEX (VECTOR_PLACEHOLDER_INDEX + 1)
+#define DATASET_VECTOR_PLACEHOLDER_INDEX (DATASET_KEY_PLACEHOLDER_INDEX + 1)
+
+#define DATASET_TAG_PLACEHOLDER "___tag_field____"   // 16 bytes 
+#define DATASET_TAG_PLACEHOLDER_INDEX (DATASET_VECTOR_PLACEHOLDER_INDEX + 1)
 
 #define DATASET_NUMERIC_TIME_PLACEHOLDER "__time__"   // 8 bytes 
-#define DATASET_NUMERIC_TIME_PLACEHOLDER_INDEX 17
+#define DATASET_NUMERIC_TIME_PLACEHOLDER_INDEX (DATASET_TAG_PLACEHOLDER_INDEX + 1)
 
 #define DATASET_NUMERIC_SCORE_PLACEHOLDER "__score__"   // 8 bytes 
-#define DATASET_NUMERIC_SCORE_PLACEHOLDER_INDEX 18
+#define DATASET_NUMERIC_SCORE_PLACEHOLDER_INDEX (DATASET_NUMERIC_TIME_PLACEHOLDER_INDEX + 1)
 
 #define VECTOR_PLACEHOLDER "__v_rd__"  // Exactly 8 characters for 2 floats
 #define VECTOR_NUM_RAND_DIM (8/sizeof(float)) // Number of random dimensions for vector generation
-#define VECTOR_PLACEHOLDER_INDEX 11
+#define VECTOR_PLACEHOLDER_INDEX (CLUSTER_PLACEHOLDER_INDEX + 1)
 
 #define CLUSTER_PLACEHOLDER "{tag}"
-#define CLUSTER_PLACEHOLDER_INDEX 10
+#define CLUSTER_PLACEHOLDER_INDEX PLACEHOLDER_NORMAL_NUM_OF
 
 
-#define PLACEHOLDER_NUM_OF 19
+#define PLACEHOLDER_NUM_OF (DATASET_NUMERIC_SCORE_PLACEHOLDER_INDEX + 1)  // Total number of placeholders
 #define PLACEHOLDER_NORMAL_NUM_OF 10  // Number of normal placeholders excluding vector and cluster placeholders
 
 
@@ -147,8 +135,6 @@ static const struct {
     [9] = {"__rand_9th__", 12},
     [CLUSTER_PLACEHOLDER_INDEX] = {CLUSTER_PLACEHOLDER, 5},
     [VECTOR_PLACEHOLDER_INDEX] = {VECTOR_PLACEHOLDER, 8},  // Vector placeholder
-    [VGEN_KEY_PLACEHOLDER_INDEX] = {VGEN_KEY_PLACEHOLDER, 16},
-    [VGEN_VECTOR_PLACEHOLDER_INDEX] = {VGEN_VECTOR_PLACEHOLDER, 16},
     [DATASET_KEY_PLACEHOLDER_INDEX] = {DATASET_KEY_PLACEHOLDER, 12},
     [DATASET_VECTOR_PLACEHOLDER_INDEX] = {DATASET_VECTOR_PLACEHOLDER, 16},
     [DATASET_TAG_PLACEHOLDER_INDEX] = {DATASET_TAG_PLACEHOLDER, 16},
@@ -331,10 +317,6 @@ typedef struct _client {
     int thread_id;
     struct clusterNode *cluster_node;
     int slots_last_update;
-    uint64_t *vgen_query_indices; /* Queue of query indices for pipelined requests */
-    int vgen_query_head;          /* Head position in query index queue */
-    int vgen_query_tail;          /* Tail position in query index queue */
-    int vgen_query_capacity;      /* Capacity of query index queue */
     uint64_t *dataset_query_indices; /* Queue of dataset query indices for recall tracking */
     int dataset_query_head;           /* Head position in dataset query index queue */
     int dataset_query_tail;           /* Tail position in dataset query index queue */
@@ -426,19 +408,11 @@ static struct config {
     uint64_t time_per_burst;
     int clean;
     int use_search; /* Use search indexes */
-    int is_vector_generator; /* Use vector generator for vector placeholders */
     searchIndex search;
     int print_search_results; /* Print FT.SEARCH results */
     int search_debug;
     EngineType engine_type; /* True if connected to MemoryDB */
     int is_cluster_mode_enabled; /* 1 if cluster_enabled:1 (CME), 0 if cluster_enabled:0 (CMD), -1 if unknown */
-    /* Vector generator configuration */
-    uint64_t vgen_initial_capacity; /* Initial vector capacity */
-    uint32_t vgen_num_centroids;    /* Number of centroids for clustering */
-    float vgen_radius;              /* Clustering radius */
-    float vgen_sparsity;            /* Sparsity level (0.0-1.0) */
-    uint64_t vgen_seed;             /* Random seed for reproducibility */
-    int vgen_precompute;            /* Precompute ground truths (warm-up phase) */
 
     /* Dataset configuration */
     int use_dataset;              /* Enable dataset mode */
@@ -980,13 +954,9 @@ static sds createVectorTemplate(uint64_t key_idx) {
         ph_index = DATASET_VECTOR_PLACEHOLDER_INDEX;
         pattern = 0xDD;
         pattern_offset = PLACEHOLDERS[ph_index].len;
-    } else if (config.is_vector_generator) {
-        ph_index = VGEN_VECTOR_PLACEHOLDER_INDEX;
-        pattern = 0xEE;
-        pattern_offset = PLACEHOLDERS[ph_index].len;
     } else {
         ph_index = 0;
-        // Original implementation for non-vgen mode
+        // Original implementation: use 
         int dim = config.search.vector_dim - VECTOR_NUM_RAND_DIM;
         ph_offset = dim * sizeof(float);
         /* Use multiple hash passes for better distribution */
@@ -1121,22 +1091,6 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
         }
         assert(0);
         return;
-    }
-    /* Print ground truth if using vector generator */
-    if (config.is_vector_generator) {     
-        uint64_t neighbors[100]; /* NEIGHBORS_PER_QUERY = 10 */
-        query_idx = vgen_get_current_query_index();
-        int neighbor_count = vgen_get_ground_truth(query_idx, neighbors);
-        
-        if (neighbor_count > 0) {
-            printf_results("\n=== Expected Ground Truth (Query #%lu) ===\n", query_idx);
-            printf_results("  Expected neighbor keys: ");
-            for (int i = 0; i < neighbor_count; i++) {
-                printf_results("%lu", neighbors[i]);
-                if (i < neighbor_count - 1) printf_results(", ");
-            }
-            printf_results("\n");
-        }
     }
 
     /* Get ground truth from dataset */
@@ -1466,10 +1420,8 @@ static sds getSearchKeyTemplate(void) {
     }
     if (config.use_dataset) {
         ph_index = DATASET_KEY_PLACEHOLDER_INDEX;
-    } else if (config.is_vector_generator) {
-        ph_index = VGEN_KEY_PLACEHOLDER_INDEX;
     } else {
-        ph_index = 0; // Original implementation for non-vgen mode
+        ph_index = 0; 
     }
     key_len += PLACEHOLDERS[ph_index].len;
     sds key = sdsnewlen("", key_len);
@@ -1916,55 +1868,6 @@ static void replacePlaceholder(const size_t *indices, const size_t count, char *
     }
 }
 
-// Vector generator placeholder replacement
-static uint64_t replacePlaceholderVectorGenerator(int thread_id, const size_t key_count, const size_t *key_indices, _Atomic uint64_t *key_counter,
-    const size_t vec_count, const size_t *vec_indices, _Atomic uint64_t *vector_counter, char *cmd) {       
-    if (!config.use_search || (key_count == 0 && vec_count == 0)) return UINT64_MAX;
-    if (!config.is_vector_generator) return UINT64_MAX;
-    
-    assert((key_count == vec_count) ||
-        (vec_count == 0) ||
-        (key_count == 0));
-    
-    // key only replacement - on vec-del commands
-    if (vec_count == 0 && key_count > 0) {
-        vgen_replace_key_placeholder(thread_id, key_indices, key_count, cmd, (uint64_t*)key_counter);
-        return UINT64_MAX;
-    }
-    
-    // vector only replacement - on search commands
-    if (key_count == 0 && vec_count > 0) {
-        uint64_t query_idx = vgen_replace_vector_placeholder_query(thread_id, vec_indices, vec_count, cmd, (uint64_t*)vector_counter);
-        return query_idx;
-    }
-    
-    // both key and vector replacement
-    if (key_count > 0 && vec_count > 0) {
-        static int debug_count = 0;
-        if (debug_count < 5) {
-            printf("DEBUG: replacePlaceholderVectorGenerator - title='%s', key_count=%zu, vec_count=%zu, thread_id=%d\n",
-                   config.title ? config.title : "NULL", key_count, vec_count, thread_id);
-            debug_count++;
-        }
-        
-        if (config.title && strcmp(config.title, "VEC-GROUND-TRUTH") == 0) {
-            /* Ground truth ingestion - use reserved range keys */
-            vgen_replace_ground_truth_placeholder(thread_id, key_indices, key_count,
-                                                  vec_indices, vec_count,
-                                                  cmd, (uint64_t*)key_counter,
-                                                  (uint64_t*)vector_counter);
-        } else {
-            /* Regular ingestion - use general range keys */
-            vgen_replace_vector_and_key_placeholder(thread_id, key_indices, key_count,
-                                                    vec_indices, vec_count,
-                                                    cmd, (uint64_t*)key_counter,
-                                                    (uint64_t*)vector_counter);
-        }
-        return UINT64_MAX;
-    }
-    return UINT64_MAX;
-}
-
 static void replacePlaceholderVector(const size_t *indices, const size_t count, 
                                     char *cmd, _Atomic uint64_t *key_counter) {
     if (!config.use_search || count == 0) return;
@@ -2245,13 +2148,6 @@ static void replacePlaceholders(client c, char *cmd_data, int cmd_count) {
             replacePlaceholderVector(indices, count, cmd, 
                                    &seq_key[VECTOR_PLACEHOLDER_INDEX]);
         }
-        /* Handle vector generator placeholders and store query index */    
-        uint64_t query_idx = replacePlaceholderVectorGenerator(c->thread_id, placeholders.count[VGEN_KEY_PLACEHOLDER_INDEX], 
-            placeholders.indices[VGEN_KEY_PLACEHOLDER_INDEX], 
-                &seq_key[VGEN_KEY_PLACEHOLDER_INDEX], 
-                placeholders.count[VGEN_VECTOR_PLACEHOLDER_INDEX], placeholders.indices[VGEN_VECTOR_PLACEHOLDER_INDEX], &seq_key[VGEN_VECTOR_PLACEHOLDER_INDEX], 
-                cmd);
-
 
         /* Handle dataset placeholders */
         if (config.use_dataset && (placeholders.count[DATASET_KEY_PLACEHOLDER_INDEX] > 0 ||
@@ -2272,11 +2168,6 @@ static void replacePlaceholders(client c, char *cmd_data, int cmd_count) {
                 &seq_key[DATASET_TAG_PLACEHOLDER_INDEX],
                 cmd
             );
-        }
-
-        /* Enqueue query index for recall tracking (handles pipelining) */
-        if (query_idx != UINT64_MAX) {
-            c->vgen_query_indices[(c->vgen_query_tail++) % c->vgen_query_capacity] = query_idx;
         }
 
     }
@@ -2312,7 +2203,6 @@ static void freeClient(client c) {
     if (c->paused) releasePausedClient(c);
     sdsfree(c->obuf);
     zfree(c->stagptr);
-    if (c->vgen_query_indices) zfree(c->vgen_query_indices);
     if (c->dataset_query_indices) zfree(c->dataset_query_indices);
     zfree(c);
     if (config.num_threads) pthread_mutex_lock(&(config.liveclients_mutex));
@@ -2344,9 +2234,6 @@ static void resetClient(client c) {
     }
     c->written = 0;
     c->pending = config.pipeline * c->seqlen;
-    /* Reset query index queue for vector generator */
-    c->vgen_query_head = 0;
-    c->vgen_query_tail = 0;
     /* Reset query index queue for dataset */
     c->dataset_query_head = 0;
     c->dataset_query_tail = 0;
@@ -2499,12 +2386,6 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                         (c->dataset_query_head++) % c->dataset_query_capacity
                     ];
                     processQueryResults(reply, query_idx);                    
-                    /* Compute recall if using vector generator */
-                    if (config.is_vector_generator && c->vgen_query_head < c->vgen_query_tail) {
-                        /* Dequeue the query index for this response */
-                        uint64_t query_idx = c->vgen_query_indices[(c->vgen_query_head++) % c->vgen_query_capacity];
-                        vgen_compute_recall(query_idx, reply);
-                    }
                     c->running_queries--;
                 }
                 freeReplyObject(reply);
@@ -2739,11 +2620,6 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
     c->paused = 0;
     c->reuse = 0;
     c->thread_id = thread_id;
-    /* Initialize query index queue for vector generator recall tracking */
-    c->vgen_query_capacity = config.pipeline * 2;  /* 2x pipeline for safety */
-    c->vgen_query_indices = zcalloc(sizeof(uint64_t) * c->vgen_query_capacity);
-    c->vgen_query_head = 0;
-    c->vgen_query_tail = 0;
 
     /* Initialize query index queue for dataset recall tracking */
     c->dataset_query_capacity = config.dataset_num_queries;  /* 2x pipeline for safety */
@@ -2970,10 +2846,6 @@ static void showLatencyReport(void) {
         printf("    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
         printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg, p0, p50, p95, p99, p100);
         
-        /* Print recall statistics if using vector generator */
-        if (config.is_vector_generator) {
-            vgen_print_recall_report();
-        }
     } else if (config.csv) {
         printf("\"%s\",\"%.2f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\"\n", config.title, reqpersec, avg,
                p0, p50, p95, p99, p100);
@@ -3086,10 +2958,6 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
                search_background_indexing_status, after_search_background_indexing_status, after_search_background_indexing_status - search_background_indexing_status);
     }
     
-    /* Show recall statistics if using vector generator */
-    if (config.is_vector_generator) {
-        vgen_print_recall_report();
-    }
     
     showLatencyReport();
     freeAllClients();
@@ -3998,25 +3866,6 @@ int parseOptions(int argc, char **argv) {
             config.search.nocontent = 1;
         } else if (!strcmp(argv[i], "--localonly")) {
             config.search.localonly = 1;
-        } else if (!strcmp(argv[i], "--use_vgen")) {
-            config.is_vector_generator = 1;
-        } else if (!strcmp(argv[i], "--vgen-capacity")) {
-            if (lastarg) goto invalid;
-            config.vgen_initial_capacity = strtoull(argv[++i], NULL, 10);
-        } else if (!strcmp(argv[i], "--vgen-centroids")) {
-            if (lastarg) goto invalid;
-            config.vgen_num_centroids = (uint32_t)atoi(argv[++i]);
-        } else if (!strcmp(argv[i], "--vgen-radius")) {
-            if (lastarg) goto invalid;
-            config.vgen_radius = (float)atof(argv[++i]);
-        } else if (!strcmp(argv[i], "--vgen-sparsity")) {
-            if (lastarg) goto invalid;
-            config.vgen_sparsity = (float)atof(argv[++i]);
-        } else if (!strcmp(argv[i], "--vgen-seed")) {
-            if (lastarg) goto invalid;
-            config.vgen_seed = strtoull(argv[++i], NULL, 10);
-        } else if (!strcmp(argv[i], "--vgen-precompute")) {
-            config.vgen_precompute = 1;
         } else if (!strcmp(argv[i], "--dataset")) {
             if (lastarg) goto invalid;
             config.dataset_name = sdsnew(argv[++i]);
@@ -4193,28 +4042,7 @@ usage:
         "   $ valkey-benchmark --search --search-name products --vector-dim 768 \\\n"
         "       --tag-field category --numeric-field price \\\n"
         "       --search-tags 'electronics:40,clothing:30,food:30' \\\n"
-        "       -t vec-insert -n 10000\n\n"
-        " Vector Generator with Recall Tracking:\n"
-        "   The vector generator (--use_vgen) provides deterministic vector generation\n"
-        "   with ground truth tracking for measuring search recall accuracy.\n\n"
-        "   Step 1 - Ingest ground truth vectors (REQUIRED before queries):\n"
-        "   $ valkey-benchmark --cluster -h <host> --use_vgen --vgen-seed 42 \\\n"
-        "       --vgen-capacity 100 --vgen-centroids 5 --vgen-radius 0.5 \\\n"
-        "       --search --vector-dim 1024 --search-name my_index --search-prefix vec: \\\n"
-        "       -t vec-ground-truth -n 10000 -c 1 --rfr 'no'\n\n"
-        "   Step 2 - Run queries and measure recall:\n"
-        "   $ valkey-benchmark --cluster -h <host> --use_vgen --vgen-seed 42 \\\n"
-        "       --vgen-capacity 100 --vgen-centroids 5 --vgen-radius 0.5 \\\n"
-        "       --search --vector-dim 1024 --search-name my_index --search-prefix vec: \\\n"
-        "       -t vec-query -n 1000 -c 10 --threads 5 --rfr 'no'\n\n"
-        "   Important: Use --rfr 'no' for write operations (vec-ground-truth, vec-insert)\n"
-        "              to send writes only to primary nodes. Replicas don't accept writes.\n\n"
-        "  $ valkey-benchmark -h zvi-1shard-no-tls-0001-001.adsscafsdf.euw1devo.zzz.www.com --cluster --rfr 'no' --use_vgen \\\n"
-        "      --vgen-capacity 50000 --vgen-centroids 100 --vgen-radius 1.331 --vgen-sparsity 0.423 --vgen-seed 53427 \\\n"
-        "      -t vec-ground-truth,vec-insert --search --vector-dim 256 --search-name new_256 --search-prefix vec_gen_256: -n 100000 -r 1000000 -c 1\n"
-        "  $ valkey-benchmark -h zvi--1shard-no-tls-0001-001.adsscafsdf.euw1devo.zzz.www.com --cluster --rfr 'no' --use_vgen \\\n"
-        "      --vgen-capacity 50000 --vgen-centroids 100 --vgen-radius 1.331 --vgen-sparsity 0.423 --vgen-seed 53427 \\\n"
-        "      -t vec-query --search --vector-dim 256 --search-name new_256 --search-prefix vec_gen_256: -n 10 -r 1000000 -c 1 --search-print-results\n";
+        "       -t vec-insert -n 10000\n\n";
 
     search_usage = 
          " --search           Enable search indexes for vec-insert, vec-query, vec-del, and\n"
@@ -4250,21 +4078,7 @@ usage:
         "                    Set tag filter pattern for vec-query operations (e.g., 'category_*').\n"
         " --search-tags <distribution>\n"
         "                    Comma-separated tag:percentage pairs for vec-insert operations.\n"
-        "                    Example: 'fruits:8.5,vegetables:7.2,dairy:32.1,meat:52.2'\n"
-        " --use_vgen         Enable vector generator for deterministic vector generation.\n"
-        "                    Provides ground truth tracking and recall metrics for vec-query tests.\n"
-        " --vgen-capacity <num>\n"
-        "                    Initial capacity for vector generator (default: based on -n value).\n"
-        " --vgen-centroids <num>\n"
-        "                    Number of centroids for vector clustering (default 5).\n"
-        " --vgen-radius <value>\n"
-        "                    Cluster radius for vector generation (default 0.5).\n"
-        " --vgen-sparsity <value>\n"
-        "                    Sparsity ratio for vectors, 0.0-1.0 (default 0.0).\n"
-        " --vgen-seed <num>  Seed for deterministic vector generation (default: random).\n"
-        " --dataset <name>   Use dataset for vector workloads.\n"
-        " --dataset-path <path> Explicit path to dataset binary file.\n"
-        " --vgen-precompute  Precompute ground truths before queries (warm-up phase).\n";
+        "                    Example: 'fruits:8.5,vegetables:7.2,dairy:32.1,meat:52.2'\n";
     printf(
         "%s%s%s%s%s%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
         "Usage: valkey-benchmark [OPTIONS] [--] [COMMAND ARGS...]\n\n"
@@ -4539,13 +4353,6 @@ int main(int argc, char **argv) {
     config.clean = 0;
     config.print_search_results = 0;
     config.search_debug = 1;
-    config.is_vector_generator = 0;
-    config.vgen_initial_capacity = 1000000;  /* Default 1M vectors */
-    config.vgen_num_centroids = 100;          /* Default 10 clusters */
-    config.vgen_radius = 0.15f;               /* Default clustering radius */
-    config.vgen_sparsity = 0.3f;             /* Default no sparsity */
-    config.vgen_seed = 42;                   /* Default seed */
-    config.vgen_precompute = 1;              /* Default: lazy evaluation */
     config.tests = NULL;
     config.conn_info.input_dbnum = 0;
     config.stdinarg = 0;
@@ -4792,11 +4599,6 @@ int main(int argc, char **argv) {
     if (config.use_search) {
         /* Initialize dataset if enabled */
         if (config.use_dataset) {
-            /* Validate mutual exclusion */
-            if (config.is_vector_generator) {
-                fprintf(stderr, "ERROR: --dataset and --use_vgen cannot be used together\n");
-                exit(1);
-            }
 
             dataset_info_t info;
             config.dataset_ctx = dataset_init(config.dataset_name, &info);
@@ -4890,29 +4692,6 @@ int main(int argc, char **argv) {
                                         &search_ingest_field_vector, &search_background_indexing_status);
         last_ftinfo = getFtInfoStatistics(config.search.name, config.selected_node_count, config.selected_nodes, config.ct);
         last_info_all = getInfoCluster(config.selected_node_count, config.selected_nodes, config.ct);
-
-        if (config.is_vector_generator) {
-            printf("Using vector generator for the benchmark.\n");
-            /* Validate mutual exclusion */
-            if (config.use_dataset) {
-                fprintf(stderr, "ERROR: --dataset and --use_vgen cannot be used together\n");
-                exit(1);
-            }
-            /* Initialize vector generator if enabled */
-            printf("Initializing vector generator for search workload...\n");
-            if (vgen_init_from_config(config.search.vector_dim,
-                                        config.vgen_initial_capacity,
-                                        config.vgen_num_centroids,
-                                        config.vgen_radius,
-                                        config.vgen_sparsity,
-                                        config.vgen_seed,
-                                        config.cluster_mode,
-                                        config.search.prefix,
-                                        config.num_threads) != 0) {
-                fprintf(stderr, "Failed to initialize vector generator\n");
-                assert(0);
-            }
-        }
         if (config.use_dataset) {
             /* Build vector ID mappings by scanning cluster for pre-existing vectors */
             /* Note: New vectors inserted during benchmark will update the mapping in real-time */
@@ -5005,10 +4784,8 @@ int main(int argc, char **argv) {
                 int prev_sequential_replacement = config.sequential_replacement; /* force sequential keys for ground truth ingestion */
                 config.requests = config.dataset_num_vectors;
                 config.sequential_replacement = 1;
-                /* Set the ground truth dataset size before ingestion */
-                if (config.is_vector_generator) {
-                    vgen_set_ground_truth_size(config.requests);
-                } else if (config.use_dataset/* && config.cluster_mode*/) {
+
+                if (config.use_dataset/* && config.cluster_mode*/) {
                     config.requests = config.dataset_num_vectors - getClusterTagMapCount(&cluster_tag_map);
                     config.keyspacelen = (int)config.dataset_num_vectors;
                 } 
@@ -5031,17 +4808,7 @@ int main(int argc, char **argv) {
 
             if (test_is_selected("vec-query")) {
                 size_t keyspacelen_before = config.keyspacelen;
-                /* Set the ground truth dataset size for query recall calculation
-                 * This should match the number of vectors that were ingested.
-                 * Priority: keyspacelen (-r), or vgen_initial_capacity (--vgen-capacity) */
-                if (config.is_vector_generator) {
-                    uint64_t dataset_size = config.keyspacelen > 0 
-                        ? (uint64_t)config.keyspacelen 
-                        : config.vgen_initial_capacity;
-                    vgen_set_ground_truth_size(dataset_size);
-                    config.keyspacelen = (int)dataset_size;                
-                } else if (config.use_dataset) {
-
+                if (config.use_dataset) {
                     // For dataset mode, the ground truth size is the number of vectors in the dataset
                     config.keyspacelen = (int)config.dataset_num_queries;
                 }
@@ -5230,11 +4997,6 @@ int main(int argc, char **argv) {
     
     /* Print dataset recall statistics if dataset mode was used */
     printDatasetRecallStats();
-
-    /* Cleanup vector generator if it was initialized */
-    if (config.is_vector_generator) {
-        vgen_cleanup();
-    }
 
     /* Cleanup cluster tag mapping if it was initialized */
     if (config.use_dataset) {

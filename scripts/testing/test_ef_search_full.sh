@@ -12,9 +12,9 @@ if [ -z "${HOST:-}" ]; then
     exit 1
 fi
 INDEX_NAME="large_scale_25"  # Use existing index with 1.18M vectors
-DATASET_FILE="/home/ubuntu/valkey/build-debug/large_dataset.bin"
-BENCHN="/home/ubuntu/valkey/build-debug/bin/valkey-benchmark"
-CLI="/home/ubuntu/valkey/build-debug/bin/valkey-cli"
+DATASET_FILE="large_dataset.bin"
+BENCHN="./bin/valkey-benchmark"
+CLI="valkey-cli"
 PREFIX="zvec_large_:"
 NUM_QUERIES=1000
 CONCURRENCY=20

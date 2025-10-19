@@ -12,7 +12,7 @@ if [ -z "${HOST:-}" ]; then
     echo "Set HOST to the Valkey/Redis cluster endpoint"
     exit 1
 fi
-DATASET_FILE="build-debug/large_dataset.bin"
+DATASET_FILE="large_dataset.bin"
 INDEX_NAME="ef_search_test"
 PREFIX="ef_test_"
 VECTOR_DIM=25

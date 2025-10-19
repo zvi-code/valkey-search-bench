@@ -35,7 +35,7 @@ PYTHON="/mnt/data/vectordb-bench-env/bin/python"
 PARQUET_PATH="$DATASETS_ROOT/$PARQUET_DIR"
 HDF5_PATH="$DATASETS_ROOT/$DATASET_NAME.hdf5"
 BINARY_PATH="$BUILD_DATASETS/$DATASET_NAME.bin"
-SYMLINK_PATH="$VALKEY_HOME/build-debug/$DATASET_NAME.bin"
+SYMLINK_PATH="$VALKEY_HOME/datasets/$DATASET_NAME.bin"
 
 echo "======================================================================"
 echo "Dataset Reconversion (with ID sorting fix)"
@@ -85,8 +85,9 @@ python3 "$VALKEY_HOME/utils/datasets/prepare_binary.py" \
 
 echo ""
 echo "======================================================================"
-echo "Step 3: Creating symlink"
+echo "Step 3: Creating symlink in datasets directory"
 echo "======================================================================"
+mkdir -p "$(dirname "$SYMLINK_PATH")"
 ln -sf "$BINARY_PATH" "$SYMLINK_PATH"
 echo "✓ Symlink created: $SYMLINK_PATH -> $BINARY_PATH"
 
