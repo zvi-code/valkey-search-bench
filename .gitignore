@@ -1,0 +1,82 @@
+# Build directories
+build-debug/
+build-release/
+build/
+cmake-build-*/
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CPackConfig.cmake
+CPackSourceConfig.cmake
+Makefile
+compile_commands.json
+commands_def_generated
+fmtargs_generated
+
+# Generated headers
+release_header_generated
+
+# Binary executables
+bin/valkey-benchmark
+valkey-benchmark
+
+# Dataset files (all formats)
+*.bin
+*.hdf5
+*.h5
+*.parquet
+
+# Keep example/template datasets if any exist
+!dummy-test.bin
+!test_mini.bin
+
+# Dataset directories
+datasets/
+data/
+/mnt/data/datasets/
+/mnt/data/build-datasets/
+
+# Python virtual environments
+venv/
+env/
+vectordb-bench-env/
+*.pyc
+__pycache__/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test results and logs
+*.log
+*.csv
+results/
+test-results/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Core dumps
+core
+core.*
+
+# Jemalloc build artifacts (keep the pre-built library)
+# Uncomment if you want to exclude jemalloc entirely:
+# jemalloc-build/

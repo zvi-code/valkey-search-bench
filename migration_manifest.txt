@@ -1,0 +1,124 @@
+# Migration Manifest - Sun Oct 19 12:00:32 UTC 2025
+# Source: /home/ubuntu/valkey
+# Target: ../valkey-search-benchmark
+
+src/valkey-benchmark.c -> ../valkey-search-benchmark/src/valkey-benchmark.c
+src/valkey-benchmark-utils.c -> ../valkey-search-benchmark/src/valkey-benchmark-utils.c
+src/valkey-benchmark-utils.h -> ../valkey-search-benchmark/src/valkey-benchmark-utils.h
+src/valkey-benchmark-vgen.c -> ../valkey-search-benchmark/src/valkey-benchmark-vgen.c
+src/valkey-benchmark-vgen.h -> ../valkey-search-benchmark/src/valkey-benchmark-vgen.h
+src/dataset_api.c -> ../valkey-search-benchmark/src/dataset_api.c
+src/dataset_api.h -> ../valkey-search-benchmark/src/dataset_api.h
+src/cluster-scan.c -> ../valkey-search-benchmark/src/cluster-scan.c
+src/cluster-scan.h -> ../valkey-search-benchmark/src/cluster-scan.h
+src/vector-id-mapping.c -> ../valkey-search-benchmark/src/vector-id-mapping.c
+src/vector-id-mapping.h -> ../valkey-search-benchmark/src/vector-id-mapping.h
+src/progress-bar.c -> ../valkey-search-benchmark/src/progress-bar.c
+src/progress-bar.h -> ../valkey-search-benchmark/src/progress-bar.h
+src/ae.c -> ../valkey-search-benchmark/src/core/ae.c
+src/ae.h -> ../valkey-search-benchmark/src/core/ae.h
+src/anet.c -> ../valkey-search-benchmark/src/core/anet.c
+src/anet.h -> ../valkey-search-benchmark/src/core/anet.h
+src/sds.c -> ../valkey-search-benchmark/src/core/sds.c
+src/sds.h -> ../valkey-search-benchmark/src/core/sds.h
+src/sha256.c -> ../valkey-search-benchmark/src/core/sha256.c
+src/sha256.h -> ../valkey-search-benchmark/src/core/sha256.h
+src/util.c -> ../valkey-search-benchmark/src/core/util.c
+src/util.h -> ../valkey-search-benchmark/src/core/util.h
+src/adlist.c -> ../valkey-search-benchmark/src/core/adlist.c
+src/adlist.h -> ../valkey-search-benchmark/src/core/adlist.h
+src/dict.c -> ../valkey-search-benchmark/src/core/dict.c
+src/dict.h -> ../valkey-search-benchmark/src/core/dict.h
+src/zmalloc.c -> ../valkey-search-benchmark/src/core/zmalloc.c
+src/zmalloc.h -> ../valkey-search-benchmark/src/core/zmalloc.h
+src/serverassert.c -> ../valkey-search-benchmark/src/core/serverassert.c
+src/serverassert.h -> ../valkey-search-benchmark/src/core/serverassert.h
+src/release.c -> ../valkey-search-benchmark/src/core/release.c
+src/release.h -> ../valkey-search-benchmark/src/core/release.h
+src/crcspeed.c -> ../valkey-search-benchmark/src/core/crcspeed.c
+src/crcspeed.h -> ../valkey-search-benchmark/src/core/crcspeed.h
+src/crccombine.c -> ../valkey-search-benchmark/src/core/crccombine.c
+src/crc64.c -> ../valkey-search-benchmark/src/core/crc64.c
+src/crc64.h -> ../valkey-search-benchmark/src/core/crc64.h
+src/siphash.c -> ../valkey-search-benchmark/src/core/siphash.c
+src/crc16.c -> ../valkey-search-benchmark/src/core/crc16.c
+src/crc16_slottable.h -> ../valkey-search-benchmark/src/core/crc16_slottable.h
+src/monotonic.c -> ../valkey-search-benchmark/src/core/monotonic.c
+src/monotonic.h -> ../valkey-search-benchmark/src/core/monotonic.h
+src/cli_common.c -> ../valkey-search-benchmark/src/core/cli_common.c
+src/cli_common.h -> ../valkey-search-benchmark/src/core/cli_common.h
+src/mt19937-64.c -> ../valkey-search-benchmark/src/core/mt19937-64.c
+src/mt19937-64.h -> ../valkey-search-benchmark/src/core/mt19937-64.h
+src/strl.c -> ../valkey-search-benchmark/src/core/strl.c
+src/fmacros.h -> ../valkey-search-benchmark/src/core/fmacros.h
+src/config.h -> ../valkey-search-benchmark/src/core/config.h
+src/version.h -> ../valkey-search-benchmark/src/core/version.h
+utils/vgenerator/vector_generator.c -> ../valkey-search-benchmark/utils/vgenerator/vector_generator.c
+utils/vgenerator/vector_generator.h -> ../valkey-search-benchmark/utils/vgenerator/vector_generator.h
+utils/vgenerator/README.md -> ../valkey-search-benchmark/utils/vgenerator/README.md
+utils/vgenerator/USER_GUIDE.md -> ../valkey-search-benchmark/utils/vgenerator/USER_GUIDE.md
+utils/vgenerator/Makefile -> ../valkey-search-benchmark/utils/vgenerator/Makefile
+utils/datasets/src -> ../valkey-search-benchmark/utils/datasets/src (directory)
+utils/datasets/cli -> ../valkey-search-benchmark/utils/datasets/cli (directory)
+utils/datasets/config -> ../valkey-search-benchmark/utils/datasets/config (directory)
+utils/datasets/scripts -> ../valkey-search-benchmark/utils/datasets/scripts (directory)
+utils/datasets/tests -> ../valkey-search-benchmark/utils/datasets/tests (directory)
+utils/datasets/examples -> ../valkey-search-benchmark/utils/datasets/examples (directory)
+utils/datasets/setup.py -> ../valkey-search-benchmark/utils/datasets/setup.py
+utils/datasets/pyproject.toml -> ../valkey-search-benchmark/utils/datasets/pyproject.toml
+utils/datasets/requirements.txt -> ../valkey-search-benchmark/utils/datasets/requirements.txt
+utils/datasets/prepare_binary.py -> ../valkey-search-benchmark/utils/datasets/prepare_binary.py
+utils/datasets/README.md -> ../valkey-search-benchmark/utils/datasets/README.md
+utils/datasets/USER_GUIDE.md -> ../valkey-search-benchmark/utils/datasets/USER_GUIDE.md
+utils/datasets/API_REFERENCE.md -> ../valkey-search-benchmark/utils/datasets/API_REFERENCE.md
+utils/datasets/DEVELOPER_GUIDE.md -> ../valkey-search-benchmark/utils/datasets/DEVELOPER_GUIDE.md
+utils/datasets/INSTALLATION_GUIDE.md -> ../valkey-search-benchmark/utils/datasets/INSTALLATION_GUIDE.md
+convert_parquet_to_hdf5_fast.py -> ../valkey-search-benchmark/scripts/conversion/convert_parquet_to_hdf5_fast.py
+convert_vectordb_dataset.sh -> ../valkey-search-benchmark/scripts/conversion/convert_vectordb_dataset.sh
+download_any_dataset.py -> ../valkey-search-benchmark/scripts/conversion/download_any_dataset.py
+reconvert_dataset.sh -> ../valkey-search-benchmark/scripts/conversion/reconvert_dataset.sh
+reconvert_all_datasets.sh -> ../valkey-search-benchmark/scripts/conversion/reconvert_all_datasets.sh
+test_vector_search.sh -> ../valkey-search-benchmark/scripts/testing/test_vector_search.sh
+test_ef_search_working.sh -> ../valkey-search-benchmark/scripts/testing/test_ef_search_working.sh
+test_ef_search_full.sh -> ../valkey-search-benchmark/scripts/testing/test_ef_search_full.sh
+test_ef_search_performance.sh -> ../valkey-search-benchmark/scripts/testing/test_ef_search_performance.sh
+demo_ef_search_simple.sh -> ../valkey-search-benchmark/scripts/testing/demo_ef_search_simple.sh
+quick_test_precompute.sh -> ../valkey-search-benchmark/scripts/testing/quick_test_precompute.sh
+test_e2e_precompute.sh -> ../valkey-search-benchmark/scripts/testing/test_e2e_precompute.sh
+vector-testing/test_multi_dataset.sh -> ../valkey-search-benchmark/scripts/benchmarking/test_multi_dataset.sh
+vector-testing/test_bigann_datasets.sh -> ../valkey-search-benchmark/scripts/benchmarking/test_bigann_datasets.sh
+vector-testing/download_datasets.sh -> ../valkey-search-benchmark/scripts/benchmarking/download_datasets.sh
+vector-testing/download_bigann_datasets.sh -> ../valkey-search-benchmark/scripts/benchmarking/download_bigann_datasets.sh
+vector-testing/bigann_dataset_manager.py -> ../valkey-search-benchmark/scripts/benchmarking/bigann_dataset_manager.py
+vector-testing/_util_analyze_results.py -> ../valkey-search-benchmark/scripts/benchmarking/_util_analyze_results.py
+vector-testing/check_dataset_structure.py -> ../valkey-search-benchmark/scripts/benchmarking/check_dataset_structure.py
+vector-testing/create_dummy_dataset.py -> ../valkey-search-benchmark/scripts/benchmarking/create_dummy_dataset.py
+vector-testing/README.md -> ../valkey-search-benchmark/scripts/benchmarking/README.md
+vector-testing/BIGANN_INTEGRATION.md -> ../valkey-search-benchmark/scripts/benchmarking/BIGANN_INTEGRATION.md
+vector-testing/IMPROVEMENTS_SUMMARY.md -> ../valkey-search-benchmark/scripts/benchmarking/IMPROVEMENTS_SUMMARY.md
+deps/hdr_histogram -> ../valkey-search-benchmark/deps/hdr_histogram (directory)
+deps/fpconv -> ../valkey-search-benchmark/deps/fpconv (directory)
+deps/libvalkey -> ../valkey-search-benchmark/deps/libvalkey (directory)
+deps/linenoise -> ../valkey-search-benchmark/deps/linenoise (directory)
+deps/CMakeLists.txt -> ../valkey-search-benchmark/deps/CMakeLists.txt
+cmake/Modules/ValkeySetup.cmake -> ../valkey-search-benchmark/cmake/Modules/ValkeySetup.cmake
+cmake/Modules/SourceFiles.cmake -> ../valkey-search-benchmark/cmake/Modules/SourceFiles.cmake
+cmake/Modules/Utils.cmake -> ../valkey-search-benchmark/cmake/Modules/Utils.cmake
+CMakeLists.txt -> ../valkey-search-benchmark/CMakeLists.txt
+src/CMakeLists.txt -> ../valkey-search-benchmark/src/CMakeLists.txt
+VECTORDB_BENCH_COMPLETE_GUIDE.md -> ../valkey-search-benchmark/docs/VECTORDB_BENCH_COMPLETE_GUIDE.md
+DATASET_TESTING_GUIDE.md -> ../valkey-search-benchmark/docs/DATASET_TESTING_GUIDE.md
+EF_SEARCH_TESTING_GUIDE.md -> ../valkey-search-benchmark/docs/EF_SEARCH_TESTING_GUIDE.md
+VECTORDB_DATASETS.md -> ../valkey-search-benchmark/docs/VECTORDB_DATASETS.md
+BENCHMARK_MODULES.md -> ../valkey-search-benchmark/docs/BENCHMARK_MODULES.md
+CLUSTER_SCANNING_ARCHITECTURE.md -> ../valkey-search-benchmark/docs/CLUSTER_SCANNING_ARCHITECTURE.md
+REFACTORING.md -> ../valkey-search-benchmark/docs/REFACTORING.md
+PRECOMPUTE_IMPLEMENTATION.md -> ../valkey-search-benchmark/docs/PRECOMPUTE_IMPLEMENTATION.md
+THREADING_FIX_IMPLEMENTATION.md -> ../valkey-search-benchmark/docs/THREADING_FIX_IMPLEMENTATION.md
+THREADING_RECALL_FIX.md -> ../valkey-search-benchmark/docs/THREADING_RECALL_FIX.md
+RECALL_VALIDATION_TESTS.md -> ../valkey-search-benchmark/docs/RECALL_VALIDATION_TESTS.md
+.github/copilot-instructions.md -> ../valkey-search-benchmark/.github/copilot-instructions.md
+valkey.conf -> ../valkey-search-benchmark/examples/configs/valkey.conf
+sentinel.conf -> ../valkey-search-benchmark/examples/configs/sentinel.conf
+COPYING -> ../valkey-search-benchmark/LICENSE
+SYMLINK: /mnt/data/build-datasets/gist-960.bin -> ../valkey-search-benchmark/datasets/gist-960.bin
