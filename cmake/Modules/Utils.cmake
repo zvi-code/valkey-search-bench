@@ -28,7 +28,7 @@ endfunction ()
 
 function (valkey_parse_version OUT_MAJOR OUT_MINOR OUT_PATCH)
     # Read and parse package version from version.h file
-    file(STRINGS ${CMAKE_SOURCE_DIR}/src/version.h VERSION_LINES)
+    file(STRINGS ${CMAKE_SOURCE_DIR}/loader/version.h VERSION_LINES)
     foreach (LINE ${VERSION_LINES})
         string(FIND "${LINE}" "#define VALKEY_VERSION " VERSION_STR_POS)
         if (VERSION_STR_POS GREATER -1)

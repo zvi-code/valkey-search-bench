@@ -27,8 +27,8 @@ if (USE_RDMA)
 endif ()
 
 # Let libvalkey use sds and dict provided by valkey
-set(DICT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src/core)
-set(SDS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src/core)
+set(DICT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/loader/core)
+set(SDS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/loader/core)
 
 add_subdirectory(libvalkey)
 add_subdirectory(linenoise)

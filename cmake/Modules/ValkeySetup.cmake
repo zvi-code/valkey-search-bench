@@ -277,17 +277,17 @@ if (BUILD_SANITIZER)
     endif ()
 endif ()
 
-include_directories("${CMAKE_SOURCE_DIR}/deps/libvalkey/include")
-include_directories("${CMAKE_SOURCE_DIR}/deps/linenoise")
-include_directories("${CMAKE_SOURCE_DIR}/deps/lua/src")
-include_directories("${CMAKE_SOURCE_DIR}/deps/hdr_histogram")
-include_directories("${CMAKE_SOURCE_DIR}/deps/fpconv")
+include_directories("${CMAKE_SOURCE_DIR}/loader/deps/libvalkey/include")
+include_directories("${CMAKE_SOURCE_DIR}/loader/deps/linenoise")
+include_directories("${CMAKE_SOURCE_DIR}/loader/deps/lua/src")
+include_directories("${CMAKE_SOURCE_DIR}/loader/deps/hdr_histogram")
+include_directories("${CMAKE_SOURCE_DIR}/loader/deps/fpconv")
 
-add_subdirectory("${CMAKE_SOURCE_DIR}/deps")
+add_subdirectory("${CMAKE_SOURCE_DIR}/loader/deps")
 
 # Update linker flags for the allocator
 if (USE_JEMALLOC)
-    include_directories("${CMAKE_SOURCE_DIR}/deps/jemalloc/include")
+    include_directories("${CMAKE_SOURCE_DIR}/loader/deps/jemalloc/include")
 endif ()
 
 # Common compiler flags
@@ -306,13 +306,13 @@ if (PYTHON_EXE)
     message(STATUS "Found python3: ${PYTHON_EXE}")
     # Rule for generating commands.def file from json files
     message(STATUS "Adding target generate_commands_def")
-    file(GLOB COMMAND_FILES_JSON "${CMAKE_SOURCE_DIR}/src/commands/*.json")
+    file(GLOB COMMAND_FILES_JSON "${CMAKE_SOURCE_DIR}/loader/commands/*.json")
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/commands_def_generated
         DEPENDS ${COMMAND_FILES_JSON}
         COMMAND ${PYTHON_EXE} ${CMAKE_SOURCE_DIR}/utils/generate-command-code.py
         COMMAND touch ${CMAKE_BINARY_DIR}/commands_def_generated
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/loader")
     add_custom_target(generate_commands_def DEPENDS ${CMAKE_BINARY_DIR}/commands_def_generated)
 
     # Rule for generating fmtargs.h
@@ -324,18 +324,18 @@ if (PYTHON_EXE)
         COMMAND ${PYTHON_EXE} ${CMAKE_SOURCE_DIR}/utils/generate-fmtargs.py >> fmtargs.h.tmp
         COMMAND mv fmtargs.h.tmp fmtargs.h
         COMMAND touch ${CMAKE_BINARY_DIR}/fmtargs_generated
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/loader")
     add_custom_target(generate_fmtargs_h DEPENDS ${CMAKE_BINARY_DIR}/fmtargs_generated)
 
     # Rule for generating test_files.h
     message(STATUS "Adding target generate_test_files_h")
-    file(GLOB UNIT_TEST_SRCS "${CMAKE_SOURCE_DIR}/src/unit/*.c")
+    file(GLOB UNIT_TEST_SRCS "${CMAKE_SOURCE_DIR}/loader/unit/*.c")
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/test_files_generated
         DEPENDS "${UNIT_TEST_SRCS};${CMAKE_SOURCE_DIR}/utils/generate-unit-test-header.py"
         COMMAND ${PYTHON_EXE} ${CMAKE_SOURCE_DIR}/utils/generate-unit-test-header.py
         COMMAND touch ${CMAKE_BINARY_DIR}/test_files_generated
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/loader")
     add_custom_target(generate_test_files_h DEPENDS ${CMAKE_BINARY_DIR}/test_files_generated)
 else ()
     # Fake targets
@@ -347,8 +347,8 @@ endif ()
 # Generate release.h file (always)
 add_custom_target(
     release_header
-    COMMAND sh -c '${CMAKE_SOURCE_DIR}/src/mkreleasehdr.sh'
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/src")
+    COMMAND sh -c '${CMAKE_SOURCE_DIR}/loader/mkreleasehdr.sh'
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/loader")
 
 # -------------------------------------------------
 # Code Generation section - end

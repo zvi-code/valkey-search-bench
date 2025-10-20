@@ -85,12 +85,12 @@ Modern embedding datasets from vectordb-bench library:
 ```bash
 # Download using Python script
 source venv/bin/activate
-python scripts/conversion/download_dataset.py COHERE 1000000
-python scripts/conversion/download_dataset.py OPENAI 5000000
+python prep_datasets/download_dataset.py COHERE 1000000
+python prep_datasets/download_dataset.py OPENAI 5000000
 
 # Or use unified manager
-./scripts/dataset.sh get cohere-medium-1m
-./scripts/dataset.sh get openai-large-5m
+./prep_datasets/dataset.sh get cohere-medium-1m
+./prep_datasets/dataset.sh get openai-large-5m
 ```
 
 **Available sizes:**
@@ -154,7 +154,7 @@ For custom datasets or understanding the pipeline:
 ```bash
 # VectorDBBench datasets
 source venv/bin/activate
-python scripts/conversion/download_dataset.py COHERE 1000000
+python prep_datasets/download_dataset.py COHERE 1000000
 ```
 
 Output: `/mnt/data/datasets/cohere/cohere_medium_1m/` (parquet files)
@@ -162,7 +162,7 @@ Output: `/mnt/data/datasets/cohere/cohere_medium_1m/` (parquet files)
 ### Step 2: Convert Parquet → HDF5
 
 ```bash
-python scripts/conversion/convert_parquet_to_hdf5_fast.py \
+python prep_datasets/convert_parquet_to_hdf5_fast.py \
   /mnt/data/datasets/cohere/cohere_medium_1m \
   /mnt/data/datasets/cohere-medium-1m.hdf5 \
   --name cohere-medium-1m

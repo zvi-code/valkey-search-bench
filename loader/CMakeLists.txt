@@ -4,8 +4,8 @@ set(INSTALL_BIN_PATH ${CMAKE_INSTALL_PREFIX}/bin)
 set_directory_properties(PROPERTIES CLEAN_NO_CUSTOM 1)
 
 # Add include directories
-include_directories("${CMAKE_SOURCE_DIR}/src")
-include_directories("${CMAKE_SOURCE_DIR}/src/core")
+include_directories("${CMAKE_SOURCE_DIR}/loader")
+include_directories("${CMAKE_SOURCE_DIR}/loader/core")
 include_directories("${CMAKE_BINARY_DIR}/jemalloc-build/include")
 
 # Set up compiler flags

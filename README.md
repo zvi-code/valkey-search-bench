@@ -55,13 +55,13 @@ make valkey-benchmark
 
 ```bash
 # Download COHERE 1M dataset
-python scripts/conversion/download_dataset.py COHERE 1000000
+python prep_datasets/download_dataset.py COHERE 1000000
 
-# Convert to binary format
-./scripts/conversion/convert_vectordb_dataset.sh \
-    cohere/cohere_medium_1m \
-    cohere-medium-1m \
-    COSINE
+# Convert to binary format (see prep_datasets/ for conversion scripts)
+python prep_datasets/convert_parquet_to_hdf5_fast.py \
+    /mnt/data/datasets/cohere/cohere_medium_1m \
+    cohere-medium-1m.hdf5 \
+    --name cohere-medium-1m
 ```
 
 ### Run Benchmark
@@ -278,13 +278,12 @@ See [Advanced Guide - Optimizer Internals](docs/ADVANCED.md#optimizer-internals)
 
 ```
 valkey-search-benchmark/
-├── src/                    # Core C source files
+├── loader/                # Core C source files (benchmark + dataset API)
+├── prep_datasets/         # Dataset download/conversion scripts
+├── bench/                 # Benchmarking scripts and utilities
+├── test/                  # Testing workflows and validation
 ├── utils/
 │   └── datasets/          # Python dataset conversion toolkit
-├── scripts/
-│   ├── conversion/        # Dataset download/conversion scripts
-│   ├── testing/           # Testing workflows
-│   └── benchmarking/      # Multi-dataset benchmarking
 ├── docs/                  # Comprehensive documentation
 └── examples/              # Configuration examples
 ```
@@ -308,13 +307,13 @@ make valkey-benchmark
 
 ```bash
 # Quick ef_search demo (30 seconds)
-./scripts/testing/demo_ef_search_simple.sh
+./test/demo_ef_search_simple.sh
 
 # Full parameter sweep (5-10 minutes)
-./scripts/testing/test_ef_search_working.sh
+./test/test_ef_search_working.sh
 
 # Multi-dataset testing
-./scripts/benchmarking/test_multi_dataset.sh
+./bench/test_multi_dataset.sh
 ```
 
 ## Performance Expectations

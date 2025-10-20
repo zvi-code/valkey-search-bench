@@ -21,7 +21,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
 
 include(ValkeySetup)
-add_subdirectory(src)
+add_subdirectory(loader)
 
 # Clear cached variables from the cache
 unset(CLANGPP CACHE)

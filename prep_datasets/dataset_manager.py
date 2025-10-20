@@ -30,7 +30,7 @@ from typing import Optional, Dict, List, Tuple
 DATASETS_DIR = Path("/mnt/data/datasets")
 BUILD_DIR = Path("/mnt/data/build-datasets")
 PROJECT_ROOT = Path(__file__).parent.parent.absolute()
-CONVERSION_DIR = PROJECT_ROOT / "scripts" / "conversion"
+CONVERSION_DIR = PROJECT_ROOT / "prep_datasets"
 UTILS_DIR = PROJECT_ROOT / "utils" / "datasets"
 
 # Binary format constants

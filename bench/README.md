@@ -29,18 +29,22 @@ python _util_analyze_results.py results.csv
 
 ### check_dataset_structure.py
 
+**Moved to**: `prep_datasets/check_dataset_structure.py`
+
 Verify dataset binary format and integrity.
 
 ```bash
-python check_dataset_structure.py dataset.bin
+python ../prep_datasets/check_dataset_structure.py dataset.bin
 ```
 
 ### create_dummy_dataset.py
 
+**Moved to**: `prep_datasets/create_dummy_dataset.py`
+
 Generate small test datasets for development and testing.
 
 ```bash
-python create_dummy_dataset.py --vectors 1000 --dims 128 --output test.bin
+python ../prep_datasets/create_dummy_dataset.py --vectors 1000 --dims 128 --output test.bin
 ```
 
 ## For End Users
