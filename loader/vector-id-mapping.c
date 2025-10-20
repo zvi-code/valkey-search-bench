@@ -1,9 +1,16 @@
-/**
+/*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2024-present, Zvi Schneider
+ * 
  * Vector ID to Cluster Tag Mapping Implementation
  *
  * This module implements vector ID mapping functionality using the generic
  * cluster scanner. It provides specialized key processing for vector keys
  * to extract vector IDs and their corresponding cluster tags.
+ *
+ * This file is part of valkey-search-benchmark and is licensed under the
+ * BSD 3-Clause License. See the LICENSE file in the root directory.
  */
 
 #include "vector-id-mapping.h"

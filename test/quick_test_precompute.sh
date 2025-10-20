@@ -1,5 +1,14 @@
 #!/bin/bash
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Copyright (c) 2024-present, Zvi Schneider
+#
 # Quick test: Compare query performance with/without precompute
+#
+# This file is part of valkey-search-benchmark and is licensed under the
+# BSD 3-Clause License. See the LICENSE file in the root directory.
+#
 
 # HOST="${HOST:-ec-search-zvi-ec-1shard-no-tls-0001-001.ajfdds.0001.euw1devo.cache.amazonaws.com}"
 if [ -z "${HOST:-}" ]; then

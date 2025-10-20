@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Copyright (c) 2024-present, Zvi Schneider
+#
+# Flexible dataset downloader for vectordb-bench
+#
+# This file is part of valkey-search-benchmark and is licensed under the
+# BSD 3-Clause License. See the LICENSE file in the root directory.
+#
 """
 Flexible dataset downloader for vectordb-bench
 Downloads directly to NVMe at /mnt/data/datasets/

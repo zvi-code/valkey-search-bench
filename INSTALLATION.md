@@ -6,11 +6,32 @@ Complete guide for setting up the Valkey Vector Search Benchmark environment.
 
 ### System Requirements
 
-- **OS**: Ubuntu/Linux (tested on Ubuntu 20.04+)
-- **CPU**: Modern x86_64 processor
-- **RAM**: 16GB+ recommended for large datasets
-- **Storage**: 100GB+ recommended (SSD/NVMe preferred)
+- **OS**: Ubuntu/Linux (tested on Ubuntu 20.04+, 22.04+)
+- **CPU**: Modern processor - **ARM64/aarch64** (AWS Graviton2/3/4) or x86_64
+- **RAM**: 16GB+ recommended for large datasets (32GB+ for ARM Graviton instances)
+- **Storage**: 200GB+ SSD/NVMe recommended for large datasets
 - **Network**: Good bandwidth for downloading datasets (up to 40GB+)
+
+### ARM64 Focus
+
+This benchmark is optimized for ARM64 servers with examples focused on AWS Graviton:
+
+- ✅ **Primary Platform**: AWS Graviton2, Graviton3, Graviton4 (ARM64)
+- ✅ **Also Supports**: x86_64 (Intel/AMD)
+- ✅ **Performance**: Native ARM builds deliver excellent performance
+- ✅ **All Dependencies**: jemalloc, HDF5, Python packages work natively on ARM64
+- � **Recommended**: AWS c7g/r7g instances (Graviton3) or c8g (Graviton4)
+
+**Example ARM64 Instance Types:**
+```bash
+# AWS Graviton3 - Best price/performance
+c7g.2xlarge   # 8 vCPU, 16GB RAM  - Good for testing
+c7g.8xlarge   # 32 vCPU, 64GB RAM - Production benchmarks
+r7g.4xlarge   # 16 vCPU, 128GB RAM - Large datasets
+
+# AWS Graviton4 - Latest generation
+c8g.4xlarge   # 16 vCPU, 32GB RAM
+```
 
 ### Software Dependencies
 
@@ -34,6 +55,10 @@ sudo apt-get install -y \
 sudo apt-get install -y \
   libhdf5-dev \
   libhdf5-serial-dev
+
+# Verify architecture (should show: arm64 or aarch64 on ARM systems)
+dpkg --print-architecture
+uname -m
 ```
 
 ## Building valkey-benchmark
@@ -49,7 +74,33 @@ cd valkey-search-benchmark
 
 **This benchmark MUST be built with jemalloc** - the same memory allocator as Valkey. The core utilities expect jemalloc functions and will segfault without it.
 
-#### Option A: Build jemalloc from Valkey repository (Recommended)
+**ARM64 Note**: Jemalloc builds natively on ARM64 with excellent performance. No special configuration needed.
+
+#### Automated Setup (Recommended for All Platforms)
+
+Use the included setup script that auto-detects Valkey builds:
+
+```bash
+cd ~/valkey-search-benchmark
+./setup_jemalloc.sh
+
+# Or specify Valkey build path manually:
+# ./setup_jemalloc.sh /path/to/valkey/build-release
+```
+
+The script will:
+- Auto-detect Valkey builds in common locations
+- Copy jemalloc to the correct location
+- Verify the installation
+- Work identically on ARM64 and x86_64
+
+#### Option A: Build jemalloc from Valkey repository (Manual)
+
+**Example: AWS Graviton3 (c7g) ARM64 instance**
+
+#### Option A: Build jemalloc from Valkey repository (Manual)
+
+**Example: AWS Graviton3 (c7g) ARM64 instance**
 
 ```bash
 # Clone Valkey if you don't have it
@@ -58,18 +109,21 @@ git clone --depth 1 https://github.com/valkey-io/valkey.git
 cd valkey
 
 # Build Valkey (this builds jemalloc as a dependency)
+# On ARM64 Graviton3, this typically takes 3-5 minutes
 mkdir build-release && cd build-release
 cmake -DCMAKE_BUILD_TYPE=Release ..
-make -j$(nproc)
+make -j$(nproc)  # Uses all available cores (e.g., 8 on c7g.2xlarge)
 
 # Copy jemalloc to benchmark build directory
 cd ~/valkey-search-benchmark
 mkdir -p build/jemalloc-build
 cp -r ~/valkey/build-release/jemalloc-build/* build/jemalloc-build/
 
-# Verify jemalloc was copied
+# Verify jemalloc was copied (ARM64 binary)
 ls -lh build/jemalloc-build/lib/libjemalloc.a
-# Should show ~42MB static library
+# Should show ~42MB static library (same size on ARM64 and x86_64)
+file build/jemalloc-build/lib/libjemalloc.a
+# Should show: ARM aarch64 (on ARM systems) or x86-64 (on x86 systems)
 ```
 
 #### Option B: Use pre-built jemalloc (if available)
@@ -106,6 +160,8 @@ ls -lh jemalloc-build/lib/libjemalloc.a
 
 ### 3. Build valkey-benchmark
 
+**Example: AWS Graviton3 ARM64 instance**
+
 ```bash
 cd ~/valkey-search-benchmark
 
@@ -116,12 +172,18 @@ mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
 
 # Build valkey-benchmark
+# On Graviton3 c7g.2xlarge (8 vCPU): ~2-3 minutes
+# On Graviton4 c8g.4xlarge (16 vCPU): ~1-2 minutes
 make valkey-benchmark -j$(nproc)
 
 # Verify build and jemalloc linkage
 ./bin/valkey-benchmark --version
 nm bin/valkey-benchmark | grep je_malloc
 # Should show jemalloc symbols like je_malloc, je_free, etc.
+
+# Verify ARM64 binary (on ARM systems)
+file bin/valkey-benchmark
+# Output: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV)...
 ```
 
 **Build options:**
@@ -208,7 +270,12 @@ pip install vectordb-bench==1.0.10 h5py pandas pyarrow numpy
 
 ### Option 2: NVMe Storage Setup (Recommended for Large Datasets)
 
-If you're working with large datasets (>10GB), using NVMe storage avoids filling the root filesystem.
+**For ARM64 AWS instances, this is STRONGLY RECOMMENDED** as instance store NVMe drives provide:
+- High-speed local storage (up to 7.5GB/s sequential read on Graviton3)
+- No EBS costs for temporary benchmark data
+- Ideal for multi-GB dataset downloads and conversions
+
+**Example: AWS Graviton3 c7gd.4xlarge with 950GB NVMe**
 
 #### Step 1: Identify NVMe Drive
 
@@ -216,56 +283,81 @@ If you're working with large datasets (>10GB), using NVMe storage avoids filling
 # List block devices
 lsblk
 
-# Example output:
-# NAME        MAJ:MIN RM   SIZE RO TYPE MOUNTPOINT
-# nvme0n1     259:0    0   200G  0 disk /
-# nvme1n1     259:1    0   512G  0 disk        <-- Use this
+# Typical output on AWS Graviton c7gd instance:
+# NAME         MAJ:MIN RM   SIZE RO TYPE MOUNTPOINT
+# nvme0n1      259:0    0    40G  0 disk /              (root EBS)
+# nvme1n1      259:1    0   950G  0 disk                (instance store NVMe)
+#
+# On r7gd instances:
+# nvme1n1      259:1    0   1.9T  0 disk                (larger instance store)
 ```
 
-#### Step 2: Mount NVMe Drive
+#### Step 2: Format and Mount NVMe Drive
 
 ```bash
 # Create mount point
 sudo mkdir -p /mnt/data
 
-# Format (⚠️ WARNING: Erases all data!)
+# Format (⚠️ WARNING: Erases all data on the drive!)
 sudo mkfs.ext4 /dev/nvme1n1
 
-# Mount
-sudo mount /dev/nvme1n1 /mnt/data
+# Mount with optimal settings for large files
+sudo mount -o defaults,noatime,discard /dev/nvme1n1 /mnt/data
 
 # Set ownership
 sudo chown -R $USER:$USER /mnt/data
 
-# Make persistent (add to /etc/fstab)
-echo "/dev/nvme1n1 /mnt/data ext4 defaults 0 2" | sudo tee -a /etc/fstab
+# Make persistent across reboots (optional for instance store)
+# Note: Instance store is ephemeral on AWS, data lost on stop/start
+echo "/dev/nvme1n1 /mnt/data ext4 defaults,noatime,discard 0 2" | sudo tee -a /etc/fstab
 
-# Verify
+# Verify mount and performance
 df -h /mnt/data
+# Should show ~900GB available on c7gd.4xlarge
+
+# Test write performance (optional)
+dd if=/dev/zero of=/mnt/data/testfile bs=1G count=1 oflag=direct
+# Should show ~1-2 GB/s write speed on Graviton3 NVMe
+rm /mnt/data/testfile
 ```
 
 #### Step 3: Setup Python Environment on NVMe
 
 ```bash
-# Create directory structure
-mkdir -p /mnt/data/datasets
-mkdir -p /mnt/data/build-datasets
+# Create directory structure for large datasets
+mkdir -p /mnt/data/datasets           # Raw HDF5/binary datasets
+mkdir -p /mnt/data/build-datasets     # Converted datasets
+mkdir -p /mnt/data/downloads          # Temporary downloads
 
-# Create virtual environment on NVMe
+# Create virtual environment on NVMe (saves root filesystem space)
 cd /mnt/data
 python3 -m venv vectordb-bench-env
 
 # Activate
 source /mnt/data/vectordb-bench-env/bin/activate
 
-# Install dependencies
+# Install dependencies (ARM64-native builds from PyPI)
 pip install --upgrade pip
 pip install vectordb-bench==1.0.10 h5py pandas pyarrow numpy
 
 # Verify installation
 python -c "import vectordb_bench; print('✓ vectordb-bench installed')"
 python -c "import h5py; import pandas; import pyarrow; print('✓ All packages ready')"
+
+# Check installed package architectures (optional)
+python -c "import numpy; numpy.show_config()"
+# Should show ARM NEON optimizations on ARM64 systems
 ```
+
+**Storage Planning for ARM64 Instances:**
+
+| Dataset Size | Recommended Instance Type | NVMe Size |
+|--------------|--------------------------|-----------|
+| < 10GB | c7g.2xlarge | No NVMe needed (use EBS) |
+| 10-100GB | c7gd.2xlarge | 237GB NVMe |
+| 100-500GB | c7gd.8xlarge | 950GB NVMe |
+| 500GB-1TB | c7gd.16xlarge | 1900GB NVMe |
+| 1TB+ | r7gd.16xlarge | 3800GB NVMe |
 
 ## Verification
 
@@ -393,6 +485,67 @@ export VENV_PATH=/mnt/data/vectordb-bench-env
 # Add to ~/.bashrc for persistence
 echo 'source /mnt/data/vectordb-bench-env/bin/activate' >> ~/.bashrc
 ```
+
+## ARM64-Specific Tips
+
+### Performance Optimization
+
+ARM64 Graviton processors offer excellent performance for vector workloads:
+
+```bash
+# Check CPU features (ARM64 SIMD extensions)
+lscpu | grep -i neon
+# NEON (ARM SIMD) accelerates vector operations
+
+# Check memory bandwidth
+sudo apt-get install -y sysbench
+sysbench memory --memory-oper=read run | grep 'transferred'
+# Graviton3: ~100-200 GB/s memory bandwidth
+```
+
+### Multi-core Utilization
+
+```bash
+# Graviton instances have many cores - use them!
+# c7g.16xlarge has 64 vCPUs
+
+# Build faster with all cores
+make -j$(nproc)
+
+# Dataset conversion with parallel processing
+python prep_datasets/convert_parquet_to_hdf5_fast.py \
+  --input /mnt/data/downloads/dataset \
+  --output /mnt/data/datasets/dataset.hdf5 \
+  --workers $(nproc)
+```
+
+### Cost Optimization
+
+ARM64 Graviton instances offer better price/performance:
+
+```bash
+# Example cost comparison (us-east-1, October 2025):
+# c7g.4xlarge (ARM64):  $0.58/hour  - 16 vCPU, 32GB RAM, Graviton3
+# c6i.4xlarge (x86_64): $0.68/hour  - 16 vCPU, 32GB RAM, Intel
+
+# ~17% cost savings with similar or better performance
+# For long-running benchmarks, this adds up!
+```
+
+### Recommended ARM64 Instance Types
+
+**Development & Testing:**
+- `c7g.2xlarge` - 8 vCPU, 16GB RAM - Good for quick tests
+- `c7gd.2xlarge` - Same + 237GB NVMe - For medium datasets
+
+**Production Benchmarks:**
+- `c7g.8xlarge` - 32 vCPU, 64GB RAM - Parallel workloads
+- `c7gd.8xlarge` - Same + 950GB NVMe - Large datasets
+- `r7g.8xlarge` - 32 vCPU, 256GB RAM - Memory-intensive
+
+**Large-Scale Testing:**
+- `c8g.12xlarge` - 48 vCPU, 96GB RAM, Graviton4 - Latest gen
+- `r7gd.16xlarge` - 64 vCPU, 512GB RAM, 3800GB NVMe - Massive datasets
 
 ## Clean Uninstall
 

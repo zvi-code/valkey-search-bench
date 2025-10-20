@@ -1,4 +1,14 @@
 #!/usr/bin/env python3 -u
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Copyright (c) 2024-present, Zvi Schneider
+#
+# UNIFIED STREAMING CONVERTER: VectorDBBench Parquet + BIGANN formats to HDF5
+#
+# This file is part of valkey-search-benchmark and is licensed under the
+# BSD 3-Clause License. See the LICENSE file in the root directory.
+#
 """
 UNIFIED STREAMING CONVERTER: VectorDBBench Parquet + BIGANN formats to HDF5
 

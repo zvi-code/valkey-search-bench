@@ -1,3 +1,16 @@
+/*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2024-present, Zvi Schneider
+ * 
+ * Valkey Benchmark Utilities - Header
+ *
+ * Utility functions for the Valkey vector search benchmark tool.
+ *
+ * This file is part of valkey-search-benchmark and is licensed under the
+ * BSD 3-Clause License. See the LICENSE file in the root directory.
+ */
+
 #ifndef __VALKEY_BENCHMARK_UTILS_H
 #define __VALKEY_BENCHMARK_UTILS_H
 #include <stdio.h>

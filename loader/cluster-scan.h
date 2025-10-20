@@ -1,3 +1,14 @@
+/*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2024-present, Zvi Schneider
+ * 
+ * Generic Parallel Cluster Scanner - Header
+ *
+ * This file is part of valkey-search-benchmark and is licensed under the
+ * BSD 3-Clause License. See the LICENSE file in the root directory.
+ */
+
 #ifndef CLUSTER_SCAN_H
 #define CLUSTER_SCAN_H
 

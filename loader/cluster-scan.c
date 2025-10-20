@@ -1,10 +1,19 @@
-/**
+/*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2024-present, Zvi Schneider
+ * 
  * Generic Parallel Cluster Scanner Implementation
  *
  * This module implements a high-performance, parallel cluster scanning framework
  * for Redis clusters. It provides a generic, callback-based architecture that
  * can be used for various cluster-wide operations.
  *
+ * This file is part of valkey-search-benchmark and is licensed under the
+ * BSD 3-Clause License. See the LICENSE file in the root directory.
+ */
+
+/**
  * DETAILED IMPLEMENTATION PLAN:
  *
  * 1. CORE SCANNING ENGINE:

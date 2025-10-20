@@ -1,6 +1,13 @@
 #!/bin/bash
 #
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Copyright (c) 2024-present, Zvi Schneider
+#
 # Unified Dataset Management - Shell Wrapper
+#
+# This file is part of valkey-search-benchmark and is licensed under the
+# BSD 3-Clause License. See the LICENSE file in the root directory.
 #
 # Simple interface to the Python dataset manager
 # Handles all downloads, conversions, and verifications

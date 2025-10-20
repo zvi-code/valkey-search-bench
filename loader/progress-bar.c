@@ -1,8 +1,15 @@
-/**
+/*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2024-present, Zvi Schneider
+ * 
  * Progress Bar Implementation
  *
  * Provides wget-style progress bars with automatic rate calculation and
  * time-based throttling to avoid terminal spam.
+ *
+ * This file is part of valkey-search-benchmark and is licensed under the
+ * BSD 3-Clause License. See the LICENSE file in the root directory.
  */
 
 #include "progress-bar.h"

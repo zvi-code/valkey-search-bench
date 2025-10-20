@@ -1,3 +1,14 @@
+/*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2024-present, Zvi Schneider
+ * 
+ * Vector ID to Cluster Tag Mapping - Header
+ *
+ * This file is part of valkey-search-benchmark and is licensed under the
+ * BSD 3-Clause License. See the LICENSE file in the root directory.
+ */
+
 #ifndef VECTOR_ID_MAPPING_H
 #define VECTOR_ID_MAPPING_H
 

@@ -1,6 +1,13 @@
 #!/bin/bash
 #
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Copyright (c) 2024-present, Zvi Schneider
+#
 # Setup jemalloc for valkey-search-benchmark
+#
+# This file is part of valkey-search-benchmark and is licensed under the
+# BSD 3-Clause License. See the LICENSE file in the root directory.
 #
 # This script helps you setup jemalloc which is REQUIRED for building
 # the benchmark tool. Without jemalloc, the binary will segfault.

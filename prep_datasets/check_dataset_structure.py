@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Copyright (c) 2024-present, Zvi Schneider
+#
+# Script to investigate dataset structures and ground truth data
+#
+# This file is part of valkey-search-benchmark and is licensed under the
+# BSD 3-Clause License. See the LICENSE file in the root directory.
+#
 
 """
 Script to investigate the actual structure of modern datasets

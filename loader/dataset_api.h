@@ -1,3 +1,14 @@
+/*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2024-present, Zvi Schneider
+ * 
+ * Dataset API - Binary dataset file format reading and manipulation
+ * 
+ * This file is part of valkey-search-benchmark and is licensed under the
+ * BSD 3-Clause License. See the LICENSE file in the root directory.
+ */
+
 #ifndef DATASET_API_H
 #define DATASET_API_H
 

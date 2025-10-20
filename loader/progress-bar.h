@@ -1,9 +1,18 @@
-/**
+/*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2024-present, Zvi Schneider
+ * 
  * Progress Bar Utility
  *
  * Provides wget-style progress bar functionality for long-running operations.
  * Thread-safe and designed for minimal terminal output overhead.
  *
+ * This file is part of valkey-search-benchmark and is licensed under the
+ * BSD 3-Clause License. See the LICENSE file in the root directory.
+ */
+
+/**
  * Example usage:
  *   progressBar bar;
  *   initProgressBar(&bar, 1000000, 0, "Processing vectors");

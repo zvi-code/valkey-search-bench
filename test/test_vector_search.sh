@@ -1,7 +1,14 @@
 #!/bin/bash
-
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Copyright (c) 2024-present, Zvi Schneider
+#
 # Entry point for Valkey vector search testing
-# Redirects to the organized vector-testing directory
+#
+# This file is part of valkey-search-benchmark and is licensed under the
+# BSD 3-Clause License. See the LICENSE file in the root directory.
+#
 
 VALKEY_HOME="${VALKEY_HOME:-/home/ubuntu/valkey}"
 

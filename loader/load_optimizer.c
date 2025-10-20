@@ -1,4 +1,8 @@
 /*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2024-present, Zvi Schneider
+ * 
  * load_optimizer.c - Adaptive Load Optimizer with Domain-Aware Phased Optimization
  * 
  * This module implements a gradient descent optimizer for automatically tuning
@@ -6,6 +10,12 @@
  * or minimize objective metrics while satisfying constraints.
  * 
  * KEY ALGORITHMIC IMPROVEMENTS FOR FAST CONVERGENCE:
+ *
+ * This file is part of valkey-search-benchmark and is licensed under the
+ * BSD 3-Clause License. See the LICENSE file in the root directory.
+ */
+
+/*
  * 
  * 1. ADAPTIVE STEP SIZING (Large → Small)
  *    - Starts with 4x base step size for rapid exploration of parameter space

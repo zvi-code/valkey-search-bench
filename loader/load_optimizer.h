@@ -1,10 +1,20 @@
 /*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2024-present, Zvi Schneider
+ * 
  * Adaptive Load Optimizer for Valkey Benchmark
  * 
  * OVERVIEW:
  * Automatically tunes benchmark parameters (clients, threads, pipeline, ef_search)
  * to maximize or minimize an objective metric (e.g., maximize QPS, minimize latency)
  * while satisfying hard constraints (e.g., recall >= 0.9, QPS <= max_rate).
+ *
+ * This file is part of valkey-search-benchmark and is licensed under the
+ * BSD 3-Clause License. See the LICENSE file in the root directory.
+ */
+
+/*
  * 
  * PHASED OPTIMIZATION STRATEGY:
  * 

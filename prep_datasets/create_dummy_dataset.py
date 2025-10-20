@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Copyright (c) 2024-present, Zvi Schneider
+#
+# Create a dummy dataset for testing the vector search pipeline
+#
+# This file is part of valkey-search-benchmark and is licensed under the
+# BSD 3-Clause License. See the LICENSE file in the root directory.
+#
 
 """
 Create a dummy dataset with low dimensions for testing the vector search pipeline end-to-end.
