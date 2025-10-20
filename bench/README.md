@@ -19,14 +19,6 @@ Run benchmarks across multiple datasets with ef_search parameter sweeps.
 - CSV output for analysis
 - Index management (respects Valkey's 10-index limit)
 
-### _util_analyze_results.py
-
-Analyze and compare benchmark results across datasets.
-
-```bash
-python _util_analyze_results.py results.csv
-```
-
 ### check_dataset_structure.py
 
 **Moved to**: `prep_datasets/check_dataset_structure.py`

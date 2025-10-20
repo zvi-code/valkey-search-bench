@@ -37,7 +37,7 @@ fi
 # HOST="${HOST:-ec-search-zvi-memdb-no-tls.ajfdds.clustercfg.memorydb-devo.eu-west-1.amazonaws.com}"
 # HOST="${HOST:-ec-search-zvi-ec-1shard-no-tls-0001-001.ajfdds.0001.euw1devo.cache.amazonaws.com}"
 BINARY_DIR="${BENCHMARK_HOME}/datasets"
-BENCHN="${VALKEY_HOME}/build-debug/bin/valkey-benchmark"
+BENCHN="${BENCHMARK_HOME}/build-debug/bin/valkey-benchmark"
 CLI="${VALKEY_HOME}/build-debug/bin/valkey-cli"
 # if run valkey-cli -h $HOST INFO Cluster to get if it's cluster mode. 
 # # Cluster
