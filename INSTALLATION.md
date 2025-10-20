@@ -45,33 +45,147 @@ git clone https://github.com/your-org/valkey-search-benchmark.git
 cd valkey-search-benchmark
 ```
 
-### 2. Build with CMake
+### 2. Setup jemalloc (REQUIRED)
+
+**This benchmark MUST be built with jemalloc** - the same memory allocator as Valkey. The core utilities expect jemalloc functions and will segfault without it.
+
+#### Option A: Build jemalloc from Valkey repository (Recommended)
 
 ```bash
-# Create build directory
-mkdir build && cd build
+# Clone Valkey if you don't have it
+cd ~
+git clone --depth 1 https://github.com/valkey-io/valkey.git
+cd valkey
 
-# Configure (Release build for performance)
+# Build Valkey (this builds jemalloc as a dependency)
+mkdir build-release && cd build-release
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j$(nproc)
+
+# Copy jemalloc to benchmark build directory
+cd ~/valkey-search-benchmark
+mkdir -p build/jemalloc-build
+cp -r ~/valkey/build-release/jemalloc-build/* build/jemalloc-build/
+
+# Verify jemalloc was copied
+ls -lh build/jemalloc-build/lib/libjemalloc.a
+# Should show ~42MB static library
+```
+
+#### Option B: Use pre-built jemalloc (if available)
+
+If you already have a Valkey build directory with jemalloc:
+
+```bash
+cd ~/valkey-search-benchmark
+mkdir -p build/jemalloc-build
+
+# Copy from existing Valkey build
+cp -r /path/to/valkey/build-*/jemalloc-build/* build/jemalloc-build/
+```
+
+#### Option C: Build jemalloc standalone
+
+```bash
+cd ~/valkey-search-benchmark
+mkdir -p build
+cd build
+
+# Download and build jemalloc
+wget https://github.com/jemalloc/jemalloc/releases/download/5.3.0/jemalloc-5.3.0.tar.bz2
+tar xjf jemalloc-5.3.0.tar.bz2
+cd jemalloc-5.3.0
+./configure --prefix=$PWD/../jemalloc-build --with-jemalloc-prefix=je_
+make -j$(nproc)
+make install
+cd ..
+
+# Verify installation
+ls -lh jemalloc-build/lib/libjemalloc.a
+```
+
+### 3. Build valkey-benchmark
+
+```bash
+cd ~/valkey-search-benchmark
+
+# Create and enter build directory
+mkdir -p build && cd build
+
+# Configure (jemalloc is auto-detected from build/jemalloc-build/)
 cmake -DCMAKE_BUILD_TYPE=Release ..
 
 # Build valkey-benchmark
-make valkey-benchmark
+make valkey-benchmark -j$(nproc)
 
-# Verify build
+# Verify build and jemalloc linkage
 ./bin/valkey-benchmark --version
+nm bin/valkey-benchmark | grep je_malloc
+# Should show jemalloc symbols like je_malloc, je_free, etc.
 ```
 
 **Build options:**
 
 ```bash
-# Debug build with symbols
+# Debug build with symbols (useful for development)
 cmake -DCMAKE_BUILD_TYPE=Debug ..
+
+# Force specific memory allocator (jemalloc is default on Linux)
+cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_MALLOC=jemalloc ..
+
+# Use libc malloc (NOT RECOMMENDED - will likely crash)
+cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_MALLOC=libc ..
 
 # Custom install prefix
 cmake -DCMAKE_INSTALL_PREFIX=/usr/local ..
 
 # Build all targets
 make -j$(nproc)
+```
+
+### 4. Verify Installation
+
+```bash
+# Check version
+./bin/valkey-benchmark --version
+# Output: valkey-benchmark 255.255.255 (git:...)
+
+# Verify jemalloc symbols are present
+nm bin/valkey-benchmark | grep je_ | head -5
+# Should show: je_malloc, je_free, je_calloc, je_realloc, etc.
+
+# Quick test (requires running Valkey/Redis instance)
+./bin/valkey-benchmark -h localhost -t ping -n 1000 -q
+# Should complete without crashes
+```
+
+### Troubleshooting Build Issues
+
+**Error: "Cannot find jemalloc library"**
+```bash
+# Make sure jemalloc-build directory exists in build/
+ls build/jemalloc-build/lib/libjemalloc.a
+
+# If missing, follow Step 2 above to build/copy jemalloc
+```
+
+**Error: "Undefined reference to je_malloc"**
+```bash
+# Clean and rebuild
+cd build
+rm -rf *
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make valkey-benchmark -j$(nproc)
+```
+
+**Segmentation fault when running**
+```bash
+# Verify jemalloc is linked
+ldd bin/valkey-benchmark | grep jemalloc
+# Or check symbols:
+nm bin/valkey-benchmark | grep je_malloc
+
+# If jemalloc symbols missing, rebuild with jemalloc
 ```
 
 ## Python Environment Setup

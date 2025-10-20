@@ -27,8 +27,10 @@ valkey_build_and_install_bin(valkey-benchmark "${VALKEY_BENCHMARK_SRCS}" "${VALK
 # Add USE_JEMALLOC compile definition
 target_compile_definitions(valkey-benchmark PRIVATE USE_JEMALLOC)
 
-add_dependencies(valkey-benchmark generate_commands_def)
-add_dependencies(valkey-benchmark generate_fmtargs_h)
+# NOTE: Removed unused code generation target dependencies:
+# - generate_commands_def (commands.def not used)
+# - generate_fmtargs_h (FMTARGS macro not used)
+# These were legacy from Valkey server, not needed for benchmark client
 
 if (VALKEY_RELEASE_BUILD)
     # Enable LTO for Release build

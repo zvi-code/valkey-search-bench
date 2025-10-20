@@ -297,63 +297,6 @@ add_valkey_server_compiler_options("-pedantic")
 # Build options (allocator, tls, rdma et al) - end
 # ----------------------------------------------------
 
-# -------------------------------------------------
-# Code Generation section
-# -------------------------------------------------
-find_program(PYTHON_EXE python3)
-if (PYTHON_EXE)
-    # Python based code generation
-    message(STATUS "Found python3: ${PYTHON_EXE}")
-    # Rule for generating commands.def file from json files
-    message(STATUS "Adding target generate_commands_def")
-    file(GLOB COMMAND_FILES_JSON "${CMAKE_SOURCE_DIR}/loader/commands/*.json")
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/commands_def_generated
-        DEPENDS ${COMMAND_FILES_JSON}
-        COMMAND ${PYTHON_EXE} ${CMAKE_SOURCE_DIR}/utils/generate-command-code.py
-        COMMAND touch ${CMAKE_BINARY_DIR}/commands_def_generated
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/loader")
-    add_custom_target(generate_commands_def DEPENDS ${CMAKE_BINARY_DIR}/commands_def_generated)
-
-    # Rule for generating fmtargs.h
-    message(STATUS "Adding target generate_fmtargs_h")
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/fmtargs_generated
-        DEPENDS ${CMAKE_SOURCE_DIR}/utils/generate-fmtargs.py
-        COMMAND sed '/Everything/,$$d' fmtargs.h > fmtargs.h.tmp
-        COMMAND ${PYTHON_EXE} ${CMAKE_SOURCE_DIR}/utils/generate-fmtargs.py >> fmtargs.h.tmp
-        COMMAND mv fmtargs.h.tmp fmtargs.h
-        COMMAND touch ${CMAKE_BINARY_DIR}/fmtargs_generated
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/loader")
-    add_custom_target(generate_fmtargs_h DEPENDS ${CMAKE_BINARY_DIR}/fmtargs_generated)
-
-    # Rule for generating test_files.h
-    message(STATUS "Adding target generate_test_files_h")
-    file(GLOB UNIT_TEST_SRCS "${CMAKE_SOURCE_DIR}/loader/unit/*.c")
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/test_files_generated
-        DEPENDS "${UNIT_TEST_SRCS};${CMAKE_SOURCE_DIR}/utils/generate-unit-test-header.py"
-        COMMAND ${PYTHON_EXE} ${CMAKE_SOURCE_DIR}/utils/generate-unit-test-header.py
-        COMMAND touch ${CMAKE_BINARY_DIR}/test_files_generated
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/loader")
-    add_custom_target(generate_test_files_h DEPENDS ${CMAKE_BINARY_DIR}/test_files_generated)
-else ()
-    # Fake targets
-    add_custom_target(generate_commands_def)
-    add_custom_target(generate_fmtargs_h)
-    add_custom_target(generate_test_files_h)
-endif ()
-
-# Generate release.h file (always)
-add_custom_target(
-    release_header
-    COMMAND sh -c '${CMAKE_SOURCE_DIR}/loader/mkreleasehdr.sh'
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/loader")
-
-# -------------------------------------------------
-# Code Generation section - end
-# -------------------------------------------------
-
 # ----------------------------------------------------------
 # All our source files are defined in SourceFiles.cmake file
 # ----------------------------------------------------------

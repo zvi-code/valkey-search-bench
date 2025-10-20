@@ -28,13 +28,26 @@ source venv/bin/activate
 pip install vectordb-bench==1.0.10 h5py pandas pyarrow numpy
 ```
 
+**Important**: This benchmark requires jemalloc. See [INSTALLATION.md](INSTALLATION.md) for complete setup instructions.
+
 ### Build
 
 ```bash
-mkdir build && cd build
+# First-time setup: Run the jemalloc setup script (auto-detects Valkey build)
+./setup_jemalloc.sh
+# Or manually specify Valkey build path:
+# ./setup_jemalloc.sh /path/to/valkey/build-release
+
+# Build benchmark
+mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
-make valkey-benchmark
+make valkey-benchmark -j$(nproc)
+
+# Verify jemalloc is linked
+nm bin/valkey-benchmark | grep je_malloc
 ```
+
+For detailed jemalloc setup options, see [INSTALLATION.md](INSTALLATION.md#2-setup-jemalloc-required).
 
 ### Download and Convert Dataset
 
