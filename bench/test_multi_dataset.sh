@@ -13,10 +13,10 @@
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
 
 # Environment variables with validation
-VALKEY_HOME="${VALKEY_HOME:-/home/ubuntu/valkey}"
-if [ ! -d "$VALKEY_HOME" ]; then
-    echo "ERROR: VALKEY_HOME directory not found: $VALKEY_HOME"
-    echo "Set VALKEY_HOME environment variable to Valkey installation path"
+VALKEY_CLI_DIR="${VALKEY_CLI_DIR:-/home/ubuntu/valkey/build-debug/bin/}"
+if [ ! -d "$VALKEY_CLI_DIR" ]; then
+    echo "ERROR: VALKEY_CLI_DIR directory not found: $VALKEY_CLI_DIR"
+    echo "Set VALKEY_CLI_DIR environment variable to Valkey CLI installation path"
     exit 1
 fi
 
@@ -38,7 +38,7 @@ fi
 # HOST="${HOST:-ec-search-zvi-ec-1shard-no-tls-0001-001.ajfdds.0001.euw1devo.cache.amazonaws.com}"
 BINARY_DIR="${BENCHMARK_HOME}/datasets"
 BENCHN="${BENCHMARK_HOME}/build-debug/bin/valkey-benchmark"
-CLI="${VALKEY_HOME}/build-debug/bin/valkey-cli"
+CLI="${VALKEY_CLI_DIR}/valkey-cli"
 # if run valkey-cli -h $HOST INFO Cluster to get if it's cluster mode. 
 # # Cluster
 # cluster_enabled:0 //disabled (1 = enabled)

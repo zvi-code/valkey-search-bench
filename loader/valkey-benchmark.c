@@ -2136,8 +2136,6 @@ static void replacePlaceholderDataset(
     _Atomic uint64_t *tag_counter,
     char *cmd)
 {
-
-    // }
     /* INSERT/PREFILL: both key and vector replacement */
     if (key_count > 0 && vec_count > 0) {
         uint64_t dataset_prefill_counter = atomic_load(&config.dataset_prefill_counter);
@@ -2160,17 +2158,10 @@ static void replacePlaceholderDataset(
             const char* cluster_tag = NULL;
             uint64_t dataset_idx = 0;
             if (!dataset_prefilled) {
-                // dataset_idx = atomic_load_explicit(&config.dataset_prefill_counter, memory_order_relaxed);
-                // dataset_idx %= config.dataset_num_vectors; 
                 /* Determine dataset index to use */
                 do {
                     dataset_idx = atomic_fetch_add_explicit(&config.dataset_prefill_counter, 1, memory_order_relaxed);
                     dataset_idx %= config.dataset_num_vectors; 
-                    // if (config.cluster_mode) {
-                    //     dataset_prefilled = (getClusterTagMapCount(&cluster_tag_map) >= config.keyspacelen);
-                    // } else {
-                    //     dataset_prefilled = dataset_idx >= config.keyspacelen - 1;
-                    // }
                     dataset_prefilled = (getClusterTagMapCount(&cluster_tag_map) >= config.dataset_num_vectors);
                     if (!dataset_prefilled && dataset_idx >= config.dataset_num_vectors) {
                         printf("Dataset exhausted while trying to avoid duplicate cluster tags (config.dataset_prefill_counter: %lu). Re-setting prefill.\n", 
@@ -3895,9 +3886,9 @@ void setDefaultSearchConfig(void) {
     config.search.prefix = sdsnew("vec:");
     config.search.vector_field = sdsnew("vector_field");
     config.search.vector_dim = 128; // Default vector dimension
-    config.search.ef_construction = 400; // Default EF Construction
-    config.search.ef_search = 200; // Default EF Search
-    config.search.m = 12; // Default HNSW M parameter
+    config.search.ef_construction = 256; // Default EF Construction
+    config.search.ef_search = 256; // Default EF Search
+    config.search.m = 16; // Default HNSW M parameter
     config.search.tag_field = NULL; // No tag field by default
     config.search.payload_tag_len = 1024; // Default max tag length
     config.search.numeric_field = NULL; // No numeric field by default
@@ -5235,6 +5226,13 @@ int main(int argc, char **argv) {
                 len = createSearchHsetTemplate(&cmd);
                 benchmark("VEC-GROUND-TRUTH", cmd, len);
                 zfree(cmd);
+                /* wait for index ingestion to complete*/
+                sds flat_index = sdsnew(config.search.name);
+                flat_index = sdscat(flat_index, "_flat");               
+                const char* index_names[2] = {config.search.name, flat_index};
+                sleep(2); /* wait a bit before checking index status */
+                waitForIndexBackfillComplete(config.engine_type, config.selected_node_count, config.selected_nodes, config.ct, index_names, 2);
+                /* Index ingestion is done */
                 config.sequential_replacement = prev_sequential_replacement; /* restore original setting */
                 config.requests = prev_num_requests; /* restore original request count */
                 config.keyspacelen = prev_keyspacelen_before;
