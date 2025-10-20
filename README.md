@@ -71,7 +71,7 @@ For detailed jemalloc setup options, see [INSTALLATION.md](INSTALLATION.md#2-set
 python prep_datasets/download_dataset.py COHERE 1000000
 
 # Convert to binary format (see prep_datasets/ for conversion scripts)
-python prep_datasets/convert_parquet_to_hdf5_fast.py \
+python prep_datasets/convert_parquet_to_hdf5.py \
     /mnt/data/datasets/cohere/cohere_medium_1m \
     cohere-medium-1m.hdf5 \
     --name cohere-medium-1m

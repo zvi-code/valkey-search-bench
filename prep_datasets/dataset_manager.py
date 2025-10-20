@@ -372,7 +372,7 @@ def get_vectordb_bench_dataset(name: str, info: Dict, output_bin: Path) -> bool:
     
     # Convert parquet to HDF5
     hdf5_path = DATASETS_DIR / f"{name}.hdf5"
-    convert_script = CONVERSION_DIR / "convert_parquet_to_hdf5_fast.py"
+    convert_script = CONVERSION_DIR / "convert_parquet_to_hdf5.py"
     
     print(f"\nConverting Parquet to HDF5...")
     cmd = [

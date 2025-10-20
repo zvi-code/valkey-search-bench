@@ -21,12 +21,12 @@ python download_dataset.py OPENAI 5000000
 
 Requires `vectordb_bench` library. Typically called by `dataset.sh`, not used directly.
 
-### convert_parquet_to_hdf5_fast.py
+### convert_parquet_to_hdf5.py
 
 Generic Parquet → HDF5 converter with memory-efficient chunked processing.
 
 ```bash
-python convert_parquet_to_hdf5_fast.py \
+python convert_parquet_to_hdf5.py \
     /path/to/parquet_dir \
     output.hdf5 \
     --name dataset-name

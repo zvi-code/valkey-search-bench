@@ -162,7 +162,7 @@ Output: `/mnt/data/datasets/cohere/cohere_medium_1m/` (parquet files)
 ### Step 2: Convert Parquet → HDF5
 
 ```bash
-python prep_datasets/convert_parquet_to_hdf5_fast.py \
+python prep_datasets/convert_parquet_to_hdf5.py \
   /mnt/data/datasets/cohere/cohere_medium_1m \
   /mnt/data/datasets/cohere-medium-1m.hdf5 \
   --name cohere-medium-1m
@@ -349,7 +349,7 @@ export DATASET_TIMEOUT=300
 
 ```bash
 # Use memory-efficient converter
-python scripts/conversion/convert_parquet_to_hdf5_fast.py \
+python scripts/conversion/convert_parquet_to_hdf5.py \
   --chunk-size 10000  # Smaller chunks
 ```
 

@@ -469,7 +469,7 @@ def convert_bigann_to_hdf5_streaming(
     print("=" * 80)
 
 
-def convert_parquet_to_hdf5_fast(dataset_dir, output_file, dataset_name):
+def convert_parquet_to_hdf5(dataset_dir, output_file, dataset_name):
     """
     Convert vectordb-bench parquet files to HDF5 with TRUE streaming.
     """
@@ -703,13 +703,13 @@ def main():
         epilog="""
 Examples:
   # VectorDBBench parquet dataset
-  python3 convert_parquet_to_hdf5_fast.py \\
+  python3 convert_parquet_to_hdf5.py \\
       /mnt/data/datasets/cohere/cohere_medium_1m \\
       cohere-medium-1m.hdf5 \\
       --name cohere-medium-1m
   
   # BIGANN fbin dataset
-  python3 convert_parquet_to_hdf5_fast.py \\
+  python3 convert_parquet_to_hdf5.py \\
       --base base.10M.fbin \\
       --queries query.10K.fbin \\
       --groundtruth gt.10K.ibin \\
@@ -717,7 +717,7 @@ Examples:
       --name "Deep1B-10M"
   
   # Texmex bvecs dataset (with normalization)
-  python3 convert_parquet_to_hdf5_fast.py \\
+  python3 convert_parquet_to_hdf5.py \\
       --base sift_base.bvecs \\
       --queries sift_query.bvecs \\
       --groundtruth sift_gt.ivecs \\
@@ -770,7 +770,7 @@ Examples:
                 print("Install with: pip install pyarrow", file=sys.stderr)
                 return 1
             
-            convert_parquet_to_hdf5_fast(args.dataset_dir, args.output_file, args.name)
+            convert_parquet_to_hdf5(args.dataset_dir, args.output_file, args.name)
         
         else:
             print("Error: Invalid arguments", file=sys.stderr)

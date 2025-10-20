@@ -513,7 +513,7 @@ sysbench memory --memory-oper=read run | grep 'transferred'
 make -j$(nproc)
 
 # Dataset conversion with parallel processing
-python prep_datasets/convert_parquet_to_hdf5_fast.py \
+python prep_datasets/convert_parquet_to_hdf5.py \
   --input /mnt/data/downloads/dataset \
   --output /mnt/data/datasets/dataset.hdf5 \
   --workers $(nproc)

@@ -56,7 +56,7 @@ This is the **standalone Valkey Vector Benchmark** package - a specialized toolk
 
 **Critical Files**:
 - `src/dataset_api.{c,h}` - Binary dataset format reader (4KB-aligned headers)
-- `convert_parquet_to_hdf5_fast.py` - Memory-optimized converter (5000 vector batches)
+- `convert_parquet_to_hdf5.py` - Memory-optimized converter (5000 vector batches)
 - `utils/datasets/prepare_binary.py` - HDF5 to binary converter
 - `convert_vectordb_dataset.sh` - End-to-end wrapper script
 
@@ -335,7 +335,7 @@ Read in this order for fastest onboarding:
 **Dataset handling**:
 - `src/dataset_api.{c,h}` - Binary format reader
 - `utils/datasets/*` - Dataset preparation scripts (HDF5→Binary conversion)
-- `convert_parquet_to_hdf5_fast.py` - Parquet→HDF5 (memory-optimized)
+- `convert_parquet_to_hdf5.py` - Parquet→HDF5 (memory-optimized)
 
 **Cluster utilities**:
 - `src/cluster-scan.{c,h}` - Generic parallel scanner
