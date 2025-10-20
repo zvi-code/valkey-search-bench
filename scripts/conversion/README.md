@@ -1,0 +1,72 @@
+# Dataset Conversion Scripts
+
+Generic tools for converting vector datasets to Valkey binary format.
+
+## Overview
+
+This directory contains format-agnostic conversion utilities used by the unified dataset manager.
+
+**For end users**: Use `../../scripts/dataset.sh` for all dataset operations (download, convert, verify).
+
+## Tools
+
+### download_dataset.py
+
+Generic downloader for VectorDBBench datasets.
+
+```bash
+python download_dataset.py COHERE 1000000
+python download_dataset.py OPENAI 5000000
+```
+
+Requires `vectordb_bench` library. Typically called by `dataset.sh`, not used directly.
+
+### convert_parquet_to_hdf5_fast.py
+
+Generic Parquet → HDF5 converter with memory-efficient chunked processing.
+
+```bash
+python convert_parquet_to_hdf5_fast.py \
+    /path/to/parquet_dir \
+    output.hdf5 \
+    --name dataset-name
+```
+
+**Features:**
+- Low memory footprint for large datasets
+- Generates HDF5 with `/train`, `/test`, `/neighbors`, `/distances` structure
+- Compatible with `utils/datasets/prepare_binary.py`
+
+Typically called by `dataset.sh`, not used directly.
+
+## Conversion Pipeline
+
+All datasets follow this pipeline:
+
+```
+Source Format → HDF5 (intermediate) → Binary (.bin)
+     ↓              ↓                     ↓
+  Download      Convert HDF5         prepare_binary.py
+                                     (in utils/datasets/)
+```
+
+## Binary Format
+
+Final output is Valkey binary format (`.bin`):
+- Magic: `0xDECDB001`
+- Version: `1` or `2` (with metadata)
+- Contains: vectors, queries, ground truth, optional metadata
+- Used by: `valkey-benchmark --dataset <name>.bin`
+
+## For End Users
+
+**Recommended workflow**:
+
+```bash
+# From project root
+./scripts/dataset.sh list              # Show all available datasets
+./scripts/dataset.sh get mnist         # Download + convert
+./scripts/dataset.sh verify file.bin   # Verify integrity
+```
+
+See [../../docs/DATASETS.md](../../docs/DATASETS.md) for complete documentation.
