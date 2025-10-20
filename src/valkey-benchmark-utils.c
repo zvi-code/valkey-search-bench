@@ -11,24 +11,7 @@
 #include <time.h>
 #include <assert.h>
 #include <unistd.h>
-// #include <stdio.h>
-// #include <string.h>
-// #include <stdlib.h>
-// #include <unistd.h>
-// // #include <errno.h>
-// // #include <time.h>
-// #include <sys/time.h>
-// #include <signal.h>
-// #include <assert.h>
-// #include <math.h>
-// #include <pthread.h>
-// #include <stdatomic.h>
 
-// #include "sds.h"
-// #include "ae.h"
-// #include "util.h"
-// #include <valkey/valkey.h>
-// #include <valkey/alloc.h>
 
 /* Forward declaration - getValkeyContext is defined in valkey-benchmark.c */
 valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char *ip_or_path, int port);

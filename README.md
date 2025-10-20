@@ -38,9 +38,24 @@ make valkey-benchmark
 
 ### Download and Convert Dataset
 
+**New Unified Dataset Manager** (recommended):
+
+```bash
+# List all available datasets
+./scripts/dataset.sh list
+
+# Download and convert in one command
+./scripts/dataset.sh get cohere-medium-1m
+
+# Or for datasets with metadata (filtered search)
+./scripts/dataset.sh get yfcc-10m
+```
+
+**Legacy method** (still works):
+
 ```bash
 # Download COHERE 1M dataset
-python scripts/conversion/download_any_dataset.py COHERE 1000000
+python scripts/conversion/download_dataset.py COHERE 1000000
 
 # Convert to binary format
 ./scripts/conversion/convert_vectordb_dataset.sh \
@@ -89,25 +104,54 @@ python scripts/conversion/download_any_dataset.py COHERE 1000000
 
 ## Documentation
 
-- **[Complete Guide](docs/VECTORDB_BENCH_COMPLETE_GUIDE.md)** - Full dataset pipeline walkthrough
-- **[Testing Guide](docs/DATASET_TESTING_GUIDE.md)** - Testing workflows and examples
-- **[ef_search Tuning](docs/EF_SEARCH_TESTING_GUIDE.md)** - Parameter optimization
-- **[Grid Search Algorithm](docs/GRID_SEARCH_IMPLEMENTATION.md)** - Exhaustive parameter exploration
-- **[Dataset Catalog](docs/VECTORDB_DATASETS.md)** - Available datasets and sizes
-- **[Architecture](docs/BENCHMARK_MODULES.md)** - Module design and organization
+📚 **Complete documentation organized in 4 guides:**
+
+1. **[Installation Guide](docs/INSTALLATION.md)** - Setup, dependencies, and building
+2. **[Dataset Guide](docs/DATASETS.md)** - Downloading, converting, and managing datasets
+3. **[Benchmarking Guide](docs/BENCHMARKING.md)** - Running benchmarks and interpreting results
+4. **[Advanced Guide](docs/ADVANCED.md)** - Optimizer internals, metadata filtering, data formats
+
+**Quick navigation:**
+- New to the project? Start with [Installation](docs/INSTALLATION.md)
+- Need datasets? See [Dataset Guide](docs/DATASETS.md)
+- Running benchmarks? Check [Benchmarking Guide](docs/BENCHMARKING.md)
+- Advanced features? Read [Advanced Guide](docs/ADVANCED.md)
 
 ## Features
 
 ### Dataset Support
 
-| Dataset | Dimensions | Sizes Available | Distance Metric |
-|---------|-----------|-----------------|-----------------|
-| COHERE  | 768       | 100K, 1M, 10M   | COSINE          |
-| OPENAI  | 1536      | 500K, 5M        | COSINE          |
-| SIFT    | 128       | 500K, 5M        | L2              |
-| GIST    | 960       | 100K, 1M        | L2              |
-| LAION   | 768       | 100M            | COSINE          |
-| BIGANN  | 128       | 10M, 100M       | L2              |
+**Unified Dataset Manager** - One command to download and convert any dataset:
+
+```bash
+./scripts/dataset.sh list                    # Show all datasets
+./scripts/dataset.sh get <dataset-name>      # Download + convert
+./scripts/dataset.sh verify datasets/*.bin   # Verify integrity
+```
+
+**Preconfigured Datasets:**
+
+| Source | Dataset | Dimensions | Vectors | Distance | Description |
+|--------|---------|-----------|---------|----------|-------------|
+| **ANN-Benchmarks** | sift-128 | 128 | 1M | L2 | SIFT image descriptors |
+| | gist-960 | 960 | 1M | L2 | GIST image descriptors |
+| | glove-25/50/100 | 25-100 | 1.18M | COSINE | GloVe word embeddings |
+| | mnist | 784 | 60K | L2 | MNIST digits |
+| | fashion-mnist | 784 | 60K | L2 | Fashion images |
+| | deep-96 | 96 | 10M | COSINE | Deep1B subset |
+| **BigANN** | bigann-10m | 128 | 10M | L2 | SIFT 10M subset |
+| | deep-10m | 256 | 10M | L2 | Deep-1B 10M subset |
+| **BigANN+Metadata** | yfcc-10m | 192 | 10M | L2 | **200K tags** (filtered search) |
+| **VectorDBBench** | cohere-small-100k | 768 | 100K | COSINE | Cohere embeddings |
+| | cohere-medium-1m | 768 | 1M | COSINE | Cohere embeddings |
+| | cohere-large-10m | 768 | 10M | COSINE | Cohere embeddings |
+| | openai-medium-500k | 1536 | 500K | COSINE | OpenAI embeddings |
+| | openai-large-5m | 1536 | 5M | COSINE | OpenAI embeddings |
+
+**Metadata Filtering** (NEW):
+- `yfcc-10m` includes 200,386 tags for filtered vector search
+- Use with `--filtered` flag for metadata-aware benchmarking
+- See [Metadata Filtering Guide](#metadata-filtering-support)
 
 ### Performance Metrics
 
@@ -118,7 +162,9 @@ python scripts/conversion/download_any_dataset.py COHERE 1000000
 
 ### Key Capabilities
 
+✅ **Unified dataset manager** - One tool for all download/conversion operations  
 ✅ Two-phase benchmarking (ground truth insertion + query testing)  
+✅ **Metadata filtering support** - Tag-based filtered vector search (YFCC-10M)  
 ✅ Cluster mode support with read-from-replica options  
 ✅ Parallel cluster scanning for recall validation  
 ✅ Vector ID to cluster tag mapping for missing neighbor reconstruction  
@@ -128,6 +174,50 @@ python scripts/conversion/download_any_dataset.py COHERE 1000000
 ✅ HDR histogram for accurate latency percentiles  
 ✅ Progress bars and real-time monitoring  
 ✅ Comprehensive result analysis and CSV export  
+
+## Metadata Filtering Support
+
+**NEW:** Benchmark filtered vector search with metadata predicates (BigANN NeurIPS 2023 Filtered Search Track).
+
+### YFCC-10M Dataset with Metadata
+
+The `yfcc-10m` dataset includes 200,386 tags (image descriptions, camera models, years, countries) for testing filtered search:
+
+```bash
+# Download YFCC-10M with metadata (2.6GB download → 8.1GB binary)
+./scripts/dataset.sh get yfcc-10m
+
+# Verify metadata is loaded
+./scripts/dataset.sh verify datasets/yfcc-10m.bin
+```
+
+### Running Filtered Search Benchmarks
+
+Use the `--filtered` flag to enable metadata-aware recall calculation:
+
+```bash
+# Benchmark with metadata filtering
+./bin/valkey-benchmark -h localhost --cluster \
+  --dataset yfcc-10m.bin \
+  --filtered \
+  -t vec-query --search --vector-dim 192 \
+  --search-name yfcc_10m --search-prefix zvec_: \
+  -n 10000 -c 10
+```
+
+**How it works:**
+1. Queries have 1-2 tag predicates (e.g., "camera_Canon AND year_2015")
+2. Ground truth is filtered to only include vectors matching those tags
+3. Recall is computed against filtered ground truth
+4. Simulates real-world filtered search scenarios
+
+**Dataset Statistics:**
+- 10M vectors with 192-dim CLIP embeddings
+- 200,386 unique tags
+- 108M tag assignments (~11 tags per vector avg)
+- 100K queries with 138K predicates (~1.4 predicates per query)
+
+**Note:** Currently, the `--filtered` flag affects recall calculation only. Full integration (adding metadata to HSET commands and predicates to FT.SEARCH queries) is documented in `METADATA_IMPLEMENTATION_STATUS.md`. See [Advanced Guide - Metadata Filtering](docs/ADVANCED.md#metadata-filtering) for complete details.
 
 ## Adaptive Load Optimizer
 
@@ -182,7 +272,7 @@ The optimizer automatically tunes benchmark parameters to achieve your performan
 - Same as objectives
 - Example: `recall_avg:gt:0.95` means "recall must be greater than 0.95"
 
-See [docs/GRID_SEARCH_IMPLEMENTATION.md](docs/GRID_SEARCH_IMPLEMENTATION.md) for algorithm details.  
+See [Advanced Guide - Optimizer Internals](docs/ADVANCED.md#optimizer-internals) for algorithm details.  
 
 ## Project Structure
 

@@ -416,6 +416,7 @@ static struct config {
 
     /* Dataset configuration */
     int use_dataset;              /* Enable dataset mode */
+    int use_filtered_search;      /* Enable metadata filtering */
     sds dataset_name;             /* Dataset identifier or path */
     void *dataset_ctx;            /* Opaque dataset context */
     uint64_t dataset_num_vectors; /* Total vectors */
@@ -1265,7 +1266,26 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
     }
 
     /* Get ground truth from dataset */
-    dataset_neighbors_t* query_neighbors = datasetGetNeighbors((dataset_ctx_t*)config.dataset_ctx, query_idx);
+    dataset_neighbors_t* query_neighbors;
+    if (config.use_filtered_search) {
+        /* Use filtered neighbors based on query predicates */
+        query_neighbors = dataset_get_filtered_neighbors((dataset_ctx_t*)config.dataset_ctx, query_idx);
+        
+        /* Fallback to regular neighbors if filtered search not available (v1 dataset) */
+        if (!query_neighbors) {
+            query_neighbors = datasetGetNeighbors((dataset_ctx_t*)config.dataset_ctx, query_idx);
+            
+            /* Warn only once about missing metadata */
+            static int warned_no_metadata = 0;
+            if (!warned_no_metadata && query_neighbors) {
+                fprintf(stderr, "WARNING: --filtered specified but dataset has no metadata. Using unfiltered ground truth.\n");
+                warned_no_metadata = 1;
+            }
+        }
+    } else {
+        /* Use regular neighbors */
+        query_neighbors = datasetGetNeighbors((dataset_ctx_t*)config.dataset_ctx, query_idx);
+    }
     if (!query_neighbors || query_neighbors->count == 0) {
         pthread_mutex_unlock(&recall_stats_mutex);
         printf("Failed to get ground truth for query index %lu\n", query_idx);
@@ -1460,6 +1480,12 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
     } else if (config.print_search_results) {
         pthread_mutex_unlock(&recall_stats_mutex);
     }
+    
+    /* Free filtered neighbors if allocated */
+    if (config.use_filtered_search && query_neighbors) {
+        dataset_free_neighbors(query_neighbors);
+    }
+    
     printf_results("\n");
 }
 
@@ -4046,6 +4072,8 @@ int parseOptions(int argc, char **argv) {
             sdsfree(config.dataset_name);
             config.dataset_name = sdsnew(argv[++i]);
             config.use_dataset = 1;
+        } else if (!strcmp(argv[i], "--filtered")) {
+            config.use_filtered_search = 1;
         } else if (!strcmp(argv[i], "--optimize")) {
             config.optimize_enabled = 1;
         } else if (!strcmp(argv[i], "--optimize-objective")) {
@@ -4274,6 +4302,7 @@ usage:
         " --dataset <name>   Use a precomputed dataset for vector operations.\n"
         "                    Dataset must be in binary format (.bin extension).\n"
         " --dataset-path <path> Specify the full path to the dataset file.\n"
+        " --filtered          Enable metadata filtering for vector search (requires dataset with metadata).\n"
         "\n"
         "Optimizer Options:\n"
         " --optimize         Enable adaptive load optimization. Automatically adjusts\n"
@@ -4673,10 +4702,6 @@ int main(int argc, char **argv) {
             }
             assert(0);
         }
-        // config.server_config = getServerConfig(config.ct, config.conn_info.hostip, config.conn_info.hostport);
-        // if (config.server_config == NULL) {
-        //     fprintf(stderr, "WARNING: Could not fetch server CONFIG\n");
-        // }
     }
     const char *node_roles = NULL;
     if (config.read_from_replica == FROM_ALL) {

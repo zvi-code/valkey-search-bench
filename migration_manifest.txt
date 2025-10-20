@@ -75,7 +75,7 @@ utils/datasets/DEVELOPER_GUIDE.md -> ../valkey-search-benchmark/utils/datasets/D
 utils/datasets/INSTALLATION_GUIDE.md -> ../valkey-search-benchmark/utils/datasets/INSTALLATION_GUIDE.md
 convert_parquet_to_hdf5_fast.py -> ../valkey-search-benchmark/scripts/conversion/convert_parquet_to_hdf5_fast.py
 convert_vectordb_dataset.sh -> ../valkey-search-benchmark/scripts/conversion/convert_vectordb_dataset.sh
-download_any_dataset.py -> ../valkey-search-benchmark/scripts/conversion/download_any_dataset.py
+download_dataset.py -> ../valkey-search-benchmark/scripts/conversion/download_dataset.py
 reconvert_dataset.sh -> ../valkey-search-benchmark/scripts/conversion/reconvert_dataset.sh
 reconvert_all_datasets.sh -> ../valkey-search-benchmark/scripts/conversion/reconvert_all_datasets.sh
 test_vector_search.sh -> ../valkey-search-benchmark/scripts/testing/test_vector_search.sh

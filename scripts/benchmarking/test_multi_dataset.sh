@@ -13,6 +13,14 @@ if [ ! -d "$VALKEY_HOME" ]; then
     exit 1
 fi
 
+# Benchmark project home (where datasets are stored)
+BENCHMARK_HOME="${BENCHMARK_HOME:-/home/ubuntu/valkey-search-benchmark}"
+if [ ! -d "$BENCHMARK_HOME" ]; then
+    echo "ERROR: BENCHMARK_HOME directory not found: $BENCHMARK_HOME"
+    echo "Set BENCHMARK_HOME environment variable to benchmark project path"
+    exit 1
+fi
+
 if [ -z "${HOST:-}" ]; then
     echo "ERROR: HOST environment variable not set"
     echo "Set HOST to the Valkey/Redis cluster endpoint"
@@ -21,9 +29,9 @@ fi
 # Configuration
 # HOST="${HOST:-ec-search-zvi-memdb-no-tls.ajfdds.clustercfg.memorydb-devo.eu-west-1.amazonaws.com}"
 # HOST="${HOST:-ec-search-zvi-ec-1shard-no-tls-0001-001.ajfdds.0001.euw1devo.cache.amazonaws.com}"
-BINARY_DIR="${VALKEY_HOME}/datasets"
+BINARY_DIR="${BENCHMARK_HOME}/datasets"
 BENCHN="${VALKEY_HOME}/build-debug/bin/valkey-benchmark"
-CLI="${BINARY_DIR}/bin/valkey-cli"
+CLI="${VALKEY_HOME}/build-debug/bin/valkey-cli"
 # if run valkey-cli -h $HOST INFO Cluster to get if it's cluster mode. 
 # # Cluster
 # cluster_enabled:0 //disabled (1 = enabled)
@@ -111,6 +119,12 @@ DATASET_CONFIG["sift-medium-500k"]="zvec_sift500k:,128,500000,100"
 DATASET_CONFIG["sift-large-5m"]="zvec_sift5m:,128,5000000,100"
 DATASET_CONFIG["gist-small-100k"]="zvec_gist100k:,960,100000,100"
 DATASET_CONFIG["gist-medium-1m"]="zvec_gist1m:,960,1000000,100"
+
+# === Big-ANN Datasets (BIGANN format, billion-scale subsets) ===
+DATASET_CONFIG["deep-10m"]="zvec_deep10m:,96,10000000,100"
+DATASET_CONFIG["text2image-10m"]="zvec_t2i10m:,200,10000000,100"
+DATASET_CONFIG["bigann-1m"]="zvec_bigann1m:,128,1000000,100"
+DATASET_CONFIG["bigann-10m"]="zvec_bigann10m:,128,10000000,100"
 
 # === Legacy datasets (for backward compatibility) ===
 DATASET_CONFIG["openai-small"]="zvec_openai_small:,1536,50000,100"
@@ -489,7 +503,7 @@ test_connection || exit 1
 echo
 
 # Create results directory
-RESULTS_DIR="${VALKEY_HOME}/ef_search_results"
+RESULTS_DIR="${BENCHMARK_HOME}/ef_search_results"
 mkdir -p "$RESULTS_DIR"
 
 # Process each dataset
