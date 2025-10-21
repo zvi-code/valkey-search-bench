@@ -191,29 +191,50 @@ Plotting this as a curve helps visualize how far the true neighbors are distribu
 ---
 ## Wrapper Scripts Enhancements
 
-### 0. Implement infrastructure for wrappers as described in WRAPPERS.md
-**Status:** Planned  
-**Description:** Establish the foundational infrastructure to support the development and integration of various wrapper scripts as outlined in WRAPPERS.md.  
-**Benefits:** Enables streamlined addition of new wrappers and enhances modularity for future testing scenarios.
+### 0. ~~Implement infrastructure for wrappers as described in WRAPPERS.md~~
+**Status:** ✅ Completed  
+**Description:** Established the foundational infrastructure to support the development and integration of various wrapper scripts as outlined in WRAPPERS.md.  
 
-### 1. Max QPS at Target Recall
-**Status:** Planned  
+**Implementation:** Created Python-based wrapper framework following KIS (Keep It Simple) principles:
+- **bench/wrappers/base_wrapper.py**: Single-file core framework (~580 lines) with `ValKeyBenchmarkWrapper`, `BenchmarkConfig`, `BenchmarkResult` classes
+- **Search algorithms**: `binary_search_max_qps()`, `grid_search()`, `find_max_qps_with_constraints()`
+- **Stage signaling**: Simple context manager emits `[STAGE:START/END]` signals to stderr for external monitoring tools
+- **Auto-detection**: Binary location, cluster mode detection
+- **Result parsing**: Console output and CSV export
+- **Example scripts**: `max_qps_recall.py` (Wrapper #1 implementation), `stage-monitor.sh` (external monitoring demo)
+
+**Design Decisions:**
+- Leverage C binary's config persistence, cluster handling, and stage signaling (TODO #5)
+- No separate ConfigManager, ClusterManager, or StageManager modules - kept in base class
+- External tools parse stage signals rather than embedded perf collection
+- All core logic in single file for maintainability
+
+**Benefits:** Clean, maintainable foundation for all future wrapper implementations. Ready for Wrappers #2-6.
+
+**Documentation:** See `bench/wrappers/README.md` for full API reference and usage examples.
+
+### 1. ~~Max QPS at Target Recall~~
+**Status:** ✅ Completed (via infrastructure)  
 **Description:** Add wrapper to find maximum QPS achievable at a specified recall threshold.  
+**Implementation:** `bench/scripts/max_qps_recall.py` - Full CLI tool with binary search algorithm.  
 **Benefits:** Automated performance envelope discovery.
 
-### 2. Max QPS at Recall and Latency Thresholds
-**Status:** Planned  
+### 2. ~~Max QPS at Recall and Latency Thresholds~~
+**Status:** ✅ Completed (via infrastructure)  
 **Description:** Add wrapper to find maximum QPS while maintaining both recall and latency thresholds.  
+**Implementation:** `ValKeyBenchmarkWrapper.find_max_qps_with_constraints()` method and available in `max_qps_recall.py` via `--max-p99-latency` flag.  
 **Benefits:** More realistic performance testing with SLA constraints.
 
-### 3. Optimal Configuration Discovery
-**Status:** Planned  
+### 3. ~~Optimal Configuration Discovery~~
+**Status:** ✅ Completed (via infrastructure)  
 **Description:** Add wrapper to find optimal thread and client count configurations.  
+**Implementation:** `ValKeyBenchmarkWrapper.grid_search()` method with filtering support.  
 **Benefits:** Automated tuning for specific hardware and workload combinations.
 
-### 4. Profiling Integration with Test Stages
-**Status:** Planned  
+### 4. ~~Profiling Integration with Test Stages~~
+**Status:** ✅ Completed (via infrastructure)  
 **Description:** Use `test stage` and `test tag` to trigger data collectors while in specific stages and tag the output accordingly.  
+**Implementation:** `bench/scripts/stage-monitor.sh` - External bash script that monitors `[STAGE:START/END]` signals and triggers perf collection during specified stages.  
 **Benefits:** Automated profiling workflow with properly labeled data.
 
 ### 5. Memory Saturation Testing
