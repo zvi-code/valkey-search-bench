@@ -21,22 +21,7 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 
 ### 4. ~~Runtime Configuration Management~~
 **Status:** ✅ Completed  
-**Description:** Add ability to set server-side configurations before a test is run, including:
-- IO threads
-- Number of worker threads  
-- Other engine-side configurations
-
-**Implementation:** Configuration file format uses simple key-value pairs (e.g., `io-threads 4`). Configurations are loaded from a file specified by `--runtime-config` and applied to all cluster nodes before benchmarks start. Original values are saved and can be restored after benchmarks using `--restore-config`. Works in both cluster and standalone modes.
-
-**Usage Examples:**
-```bash
-# Apply configurations before benchmark
-./valkey-benchmark -h localhost -t ping --runtime-config my-config.conf
-
-# Apply and restore after benchmark
-./valkey-benchmark -h localhost -t ping --runtime-config my-config.conf --restore-config
-```
-
+**Description:** Add ability to set server-side configurations before a test is run and restore original configurations afterward.
 **Benefits:** More flexible testing scenarios without manual server configuration changes. Enables automated testing of different server configurations.
 
 ### 5. Test Stage and Tag Reporting
@@ -125,7 +110,12 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Description:** Add support for benchmarking across multiple Valkey clusters simultaneously.  
 **Benefits:** Enables testing of distributed scenarios and cluster interactions.
 
-### 26. Add additional search results quality metrics
+### 26. Collect latency per-node both in CME and when using replicas in CMD
+**Status:** Planned  
+**Description:** Extend the benchmark tool to collect and report latency metrics for each individual node in a cluster environment, both in Cluster Mode Enabled (CME) and when using replicas in Cluster Mode Disabled (CMD).  
+**Benefits:** Provides deeper insights into performance variations across different nodes, helping identify bottlenecks and optimize cluster configurations.
+
+### 27. Add additional search results quality metrics
 **Status:** Planned  
 **Description:** Implement additional metrics to evaluate the quality of search results beyond simple recall. These metrics provide deeper insights into ranking quality and relevance ordering:
 
