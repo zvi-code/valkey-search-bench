@@ -92,9 +92,26 @@ best = wrapper.find_max_qps_with_constraints(
 
 ## Example Scripts
 
+### run_queries.py
+
+**Auto-optimized query benchmark** - simplest interface, only requires dataset and host:
+
+```bash
+# Simplest usage - automatic optimization
+./bench/scripts/run_queries.py \
+    --host localhost \
+    --dataset datasets/sift-128.bin
+
+# The script automatically:
+#   - Detects dataset dimensions and size
+#   - Estimates optimal ef_search range
+#   - Finds optimal num_clients via binary search
+#   - Reports exact command used
+```
+
 ### max_qps_recall.py
 
-Find maximum QPS at target recall threshold:
+Find maximum QPS at target recall threshold (more control than run_queries.py):
 
 ```bash
 # Basic usage
