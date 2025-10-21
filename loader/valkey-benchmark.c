@@ -439,6 +439,12 @@ static struct config {
     /* Config persistence flags */
     int save_config;              /* Save configuration after successful run */
     int no_save_config;           /* Skip saving configuration */
+    
+    /* Baseline latency measurement */
+    int measure_baseline;         /* Measure baseline network latency (default: 1) */
+    int no_baseline;              /* Disable baseline measurement */
+    int baseline_measured;        /* Flag indicating baseline has been measured */
+    int skip_latency_report;      /* Skip printing latency report (used internally) */
 } config;
 
 /* Recall statistics for dataset mode */
@@ -452,8 +458,21 @@ typedef struct {
     uint64_t zero_recalls;
 } recallStats;
 
+/* Baseline network latency measurements */
+typedef struct {
+    double avg_latency_ms;
+    double min_latency_ms;
+    double p50_latency_ms;
+    double p90_latency_ms;
+    double p95_latency_ms;
+    double p99_latency_ms;
+    double max_latency_ms;
+    int measured;  /* 1 if baseline has been measured, 0 otherwise */
+} baseline_latency_t;
+
 static recallStats dataset_recall_stats;
 static recallStats dataset_recall_stats_ext;
+static baseline_latency_t baseline_latency = {0};
 
 static clusterTagMap cluster_tag_map;
 pthread_mutex_t recall_stats_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -671,6 +690,7 @@ static void freeBenchmarkThread(benchmarkThread *thread);
 static void freeBenchmarkThreads(void);
 static void *execBenchmarkThread(void *ptr);
 static void benchmark(const char *title, char *cmd, int len);
+static void measureBaselineLatency(void);
 static clusterNode *createClusterNode(char *ip, int port);
 // static serverConfig *getServerConfig(enum valkeyConnectionType ct, const char *ip_or_path, int port);
 static sds selectTagByDistribution(void);
@@ -3038,10 +3058,36 @@ static void showLatencyReport(void) {
         printf("  latency summary (msec):\n");
         printf("    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
         printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg, p0, p50, p95, p99, p100);
+        if (baseline_latency.measured) {
+            printf("\n");
+            printf("  baseline network latency (msec):\n");
+            printf("    %9s %9s %9s %9s\n", "avg", "p50", "p95", "p99");
+            printf("    %9.3f %9.3f %9.3f %9.3f\n",
+                   baseline_latency.avg_latency_ms,
+                   baseline_latency.p50_latency_ms,
+                   baseline_latency.p95_latency_ms,
+                   baseline_latency.p99_latency_ms);
+            printf("  processing overhead (msec) = latency - baseline:\n");
+            printf("    %9s %9s %9s %9s\n", "avg", "p50", "p95", "p99");
+            printf("    %9.3f %9.3f %9.3f %9.3f\n",
+                   avg - baseline_latency.avg_latency_ms,
+                   p50 - baseline_latency.p50_latency_ms,
+                   p95 - baseline_latency.p95_latency_ms,
+                   p99 - baseline_latency.p99_latency_ms);
+        }
         
     } else if (config.csv) {
-        printf("\"%s\",\"%.2f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\"\n", config.title, reqpersec, avg,
-               p0, p50, p95, p99, p100);
+        if (baseline_latency.measured) {
+            printf("\"%s\",\"%.2f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\"\n",
+                   config.title, reqpersec, avg, p0, p50, p95, p99, p100,
+                   baseline_latency.avg_latency_ms,
+                   baseline_latency.p50_latency_ms,
+                   baseline_latency.p95_latency_ms,
+                   baseline_latency.p99_latency_ms);
+        } else {
+            printf("\"%s\",\"%.2f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\"\n", config.title, reqpersec, avg,
+                   p0, p50, p95, p99, p100);
+        }
     } else {
         printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
         printf("%s: %.2f requests per second, p50=%.3f msec\n", config.title, reqpersec, p50);
@@ -3151,8 +3197,9 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
                search_background_indexing_status, after_search_background_indexing_status, after_search_background_indexing_status - search_background_indexing_status);
     }
     
-    
-    showLatencyReport();
+    if (!config.skip_latency_report) {
+        showLatencyReport();
+    }
     freeAllClients();
     if (config.threads) freeBenchmarkThreads();
     if (config.current_sec_latency_histogram) hdr_close(config.current_sec_latency_histogram);
@@ -3162,6 +3209,56 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
 /* Benchmark a single RESP-encoded command of length len. */
 static void benchmark(const char *title, char *cmd, int len) {
     benchmarkSequence(title, cmd, len, 1);
+}
+
+/* Measure baseline network latency using minimal PING commands */
+static void measureBaselineLatency(void) {
+    if (baseline_latency.measured) {
+        return;  /* Already measured */
+    }
+    
+    /* Save current configuration */
+    int saved_clients = config.numclients;
+    int saved_threads = config.num_threads;
+    long long saved_requests = config.requests;
+    int saved_quiet = config.quiet;
+    int saved_csv = config.csv;
+    const char *saved_title = config.title;
+    
+    /* Set to single-threaded, single-client for pure network measurement */
+    config.numclients = 1;
+    config.num_threads = 0;
+    config.requests = 10000;
+    config.quiet = 1;  /* Suppress all output during baseline measurement */
+    config.csv = 0;    /* Don't output CSV for baseline */
+    config.skip_latency_report = 1;  /* Don't show latency report for baseline */
+    
+    /* Run PING_INLINE benchmark (minimal overhead) - silently */
+    benchmark("BASELINE_LATENCY", "PING\r\n", 6);
+    
+    /* Collect baseline metrics from histogram */
+    if (config.latency_histogram && config.latency_histogram->total_count > 0) {
+        baseline_latency.avg_latency_ms = hdr_mean(config.latency_histogram) / 1000.0;
+        baseline_latency.min_latency_ms = ((double)hdr_min(config.latency_histogram)) / 1000.0;
+        baseline_latency.p50_latency_ms = hdr_value_at_percentile(config.latency_histogram, 50.0) / 1000.0;
+        baseline_latency.p90_latency_ms = hdr_value_at_percentile(config.latency_histogram, 90.0) / 1000.0;
+        baseline_latency.p95_latency_ms = hdr_value_at_percentile(config.latency_histogram, 95.0) / 1000.0;
+        baseline_latency.p99_latency_ms = hdr_value_at_percentile(config.latency_histogram, 99.0) / 1000.0;
+        baseline_latency.max_latency_ms = ((double)hdr_max(config.latency_histogram)) / 1000.0;
+        baseline_latency.measured = 1;
+    }
+    
+    /* Restore original configuration */
+    config.numclients = saved_clients;
+    config.num_threads = saved_threads;
+    config.requests = saved_requests;
+    config.quiet = saved_quiet;
+    config.csv = saved_csv;
+    config.title = saved_title;
+    config.skip_latency_report = 0;  /* Re-enable latency reports */
+    
+    /* Mark as measured in config */
+    config.baseline_measured = 1;
 }
 
 /* Thread functions. */
@@ -4161,6 +4258,11 @@ int parseOptions(int argc, char **argv) {
             config.save_config = 1;
         } else if (!strcmp(argv[i], "--no-save-config")) {
             config.no_save_config = 1;
+        } else if (!strcmp(argv[i], "--no-baseline")) {
+            config.no_baseline = 1;
+        } else if (!strcmp(argv[i], "--baseline-latency")) {
+            /* Explicitly enable (though it's default) - kept for backward compatibility */
+            config.no_baseline = 0;
         } else if (!strcmp(argv[i], "--clear-config")) {
             if (config_persist_clear() == 0) {
                 printf("Configuration cleared successfully.\n");
@@ -4446,6 +4548,12 @@ usage:
         " --clear-config     Clear saved configuration and exit.\n"
         " --show-config      Display saved configuration and exit.\n"
         "\n"
+        "Network Baseline Measurement:\n"
+        " --no-baseline      Disable baseline network latency measurement (enabled by default).\n"
+        "                    By default, baseline network latency is measured automatically\n"
+        "                    using 10,000 PING operations (single client/thread). Results are\n"
+        "                    shown in latency reports and included in CSV output.\n"
+        "\n"
         " --help             Output this help and exit.\n"
         " --version          Output version and exit.\n\n"
         "Examples:\n\n"
@@ -4487,6 +4595,7 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         return AE_NOMORE;
     }
     if (config.csv) return SHOW_THROUGHPUT_INTERVAL;
+    if (config.quiet) return SHOW_THROUGHPUT_INTERVAL;
     /* only first thread output throughput */
     if (thread != NULL && thread->index != 0) {
         return SHOW_THROUGHPUT_INTERVAL;
@@ -4916,9 +5025,20 @@ int main(int argc, char **argv) {
             aeMain(config.el);
         /* and will wait for every */
     }
+    
+    /* Measure baseline network latency (enabled by default unless --no-baseline) */
+    if (!config.no_baseline) {
+        measureBaselineLatency();
+    }
+    
     if (config.csv) {
-        printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
-               "latency_ms\",\"max_latency_ms\"\n");
+        if (!config.no_baseline && baseline_latency.measured) {
+            printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
+                   "latency_ms\",\"max_latency_ms\",\"baseline_avg_ms\",\"baseline_p50_ms\",\"baseline_p95_ms\",\"baseline_p99_ms\"\n");
+        } else {
+            printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
+                   "latency_ms\",\"max_latency_ms\"\n");
+        }
     }
     /* Run benchmark with command in the remainder of the arguments. */
     if (argc) {
@@ -5151,6 +5271,11 @@ int main(int argc, char **argv) {
         /* Set optimization objective */
         parseOptimizerObjective(config.optimizer, config.optimize_objective);
         
+        /* Measure baseline network latency (enabled by default unless --no-baseline) */
+        if (!config.no_baseline) {
+            measureBaselineLatency();
+        }
+        
         /* Open CSV output file if specified */
         FILE *csv_file = NULL;
         if (config.optimize_csv_file) {
@@ -5303,6 +5428,11 @@ int main(int argc, char **argv) {
         
         /* Exit after optimization - don't run normal benchmarks */
         return 0;
+    }
+    
+    /* Measure baseline network latency for non-optimizer runs (enabled by default unless --no-baseline) */
+    if (!config.no_baseline && !config.baseline_measured) {
+        measureBaselineLatency();
     }
     
     /* Run default benchmark suite. */
