@@ -11,6 +11,7 @@ This package extracts the vector search benchmarking capabilities from the Valke
 - **Cluster Support**: Parallel cluster scanning with vector ID to cluster tag mapping
 - **Recall Validation**: Accurate recall measurement with missing neighbor reconstruction
 - **Performance Testing**: Throughput (QPS), latency (p50/p99), and recall analysis
+- **Baseline Network Latency**: Automatic network RTT measurement to separate network overhead from processing time
 - **Adaptive Optimization**: Automatic parameter tuning with multi-phase optimization (binary search + grid search)
 - **Parameter Tuning**: ef_search parameter sweep and exhaustive exploration
 
@@ -177,6 +178,7 @@ python prep_datasets/convert_parquet_to_hdf5.py \
 
 ✅ **Unified dataset manager** - One tool for all download/conversion operations
 ✅ Two-phase benchmarking (ground truth insertion + query testing)
+✅ **Baseline network latency measurement** - Automatic RTT measurement (enabled by default)
 ✅ **Metadata filtering support** - Tag-based filtered vector search (YFCC-10M)
 ✅ **Configuration persistence** - Automatic saving and loading of benchmark parameters
 ✅ Cluster mode support with read-from-replica options
@@ -385,6 +387,62 @@ The following parameters are automatically persisted:
 - **Consistent Testing**: Ensures consistent parameters across benchmark runs
 - **Team Workflows**: Share workspace-local configs via version control
 - **Parameter Memory**: Never lose working configurations
+
+## Baseline Network Latency Measurement
+
+The benchmark tool automatically measures baseline network latency to help you separate network RTT overhead from operation-specific processing time. This feature is **enabled by default** and runs silently before your benchmarks.
+
+### How It Works
+
+- **Automatic Measurement**: Runs 10,000 PING operations (single-threaded, single-client) before benchmarks
+- **Silent Operation**: No output during measurement - results shown only in final reports
+- **Accurate Baseline**: Measures pure network RTT + minimal Redis/Valkey processing overhead
+- **Processing Overhead**: Shows `operation latency - baseline latency` breakdown
+
+### Example Output
+
+**Non-CSV Mode:**
+```
+Summary:
+  throughput summary: 100000.00 requests per second
+  latency summary (msec):
+          avg       min       p50       p95       p99       max
+        0.361     0.112     0.311     0.495     1.639     1.751
+
+  baseline network latency (msec):
+          avg       p50       p95       p99
+        0.185     0.143     0.351     0.359
+  processing overhead (msec) = latency - baseline:
+          avg       p50       p95       p99
+        0.176     0.168     0.144     1.280
+```
+
+**CSV Mode:**
+```csv
+"test","rps","avg_latency_ms",...,"baseline_avg_ms","baseline_p50_ms","baseline_p95_ms","baseline_p99_ms"
+"GET","58823.53","0.156",...,"0.133","0.127","0.143","0.239"
+```
+
+### Usage
+
+```bash
+# Default - baseline enabled automatically
+./bin/valkey-benchmark -h host -t get -n 5000
+
+# Disable baseline if needed
+./bin/valkey-benchmark -h host -t get -n 5000 --no-baseline
+
+# Works with vector search too
+./bin/valkey-benchmark --dataset vectors.bin -t vec-query
+```
+
+### Benefits
+
+- ✅ **No configuration needed** - Works out of the box
+- ✅ **Silent operation** - Doesn't clutter output
+- ✅ **Accurate analysis** - Separates network from processing latency
+- ✅ **CSV compatible** - Baseline columns included automatically
+- ✅ **Remote testing** - Essential for benchmarking remote clusters
 
 ## Project Structure
 

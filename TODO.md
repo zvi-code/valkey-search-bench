@@ -107,7 +107,7 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Status:** ✅ Completed  
 **Description:** Measure baseline network latency using PING commands at the beginning of a benchmark run. The baseline is measured with 10,000 PING operations using single-threaded, single-client configuration to establish pure network RTT. The baseline latency is displayed separately and included in both console output and CSV exports, showing processing overhead (operation latency - baseline latency).
 **Benefits:** More accurate latency measurements by separating network overhead from operation-specific processing time.
-**Implementation:** Use `--baseline-latency` flag to enable baseline measurement. Results include avg, p50, p90, p95, p99, and max latencies.
+**Implementation:** Enabled by default (no flags needed). Runs silently before benchmarks. Use `--no-baseline` to disable. Results include avg, p50, p90, p95, p99, and max latencies in both console and CSV output.
 
 
 ---
