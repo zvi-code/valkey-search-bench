@@ -11,8 +11,8 @@
  * BSD 3-Clause License. See the LICENSE file in the root directory.
  */
 
-#include "valkey-benchmark-utils.h"
-#include "progress-bar.h"
+#include "search_utils.h"
+#include "utils.h"
 #include <ctype.h>
 #include <valkey/valkey.h>
 #include <math.h>

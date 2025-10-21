@@ -155,11 +155,11 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/loader/core/sha256.c
     ${CMAKE_SOURCE_DIR}/loader/core/util.c
     ${CMAKE_SOURCE_DIR}/loader/valkey-benchmark.c
-    ${CMAKE_SOURCE_DIR}/loader/valkey-benchmark-utils.c
+    ${CMAKE_SOURCE_DIR}/loader/search_utils.c
     ${CMAKE_SOURCE_DIR}/loader/dataset_api.c
-    ${CMAKE_SOURCE_DIR}/loader/cluster-scan.c
-    ${CMAKE_SOURCE_DIR}/loader/vector-id-mapping.c
-    ${CMAKE_SOURCE_DIR}/loader/progress-bar.c
+    ${CMAKE_SOURCE_DIR}/loader/mapping_scan.c
+    ${CMAKE_SOURCE_DIR}/loader/dataset_id_mapping.c
+    ${CMAKE_SOURCE_DIR}/loader/utils.c
     ${CMAKE_SOURCE_DIR}/loader/load_optimizer.c
     ${CMAKE_SOURCE_DIR}/loader/core/adlist.c
     ${CMAKE_SOURCE_DIR}/loader/core/dict.c

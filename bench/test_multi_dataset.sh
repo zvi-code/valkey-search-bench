@@ -246,11 +246,14 @@ insert_dataset() {
     echo "Inserting vectors (this may take several minutes)..."
     local insertion_output=$(mktemp)
     echo "running command $BENCHN -h $HOST $CLUSTER_MODE --rfr no --dataset $binary_file -t vec-ground-truth --search --vector-dim $dims --search-name $index_name --search-prefix $prefix -n $expected_vectors -c 10 --clean"
+    
+    # Run without tee to allow progress bars to work correctly
+    # Save output to file, but let progress bars display in real-time
     if ! $BENCHN -h "$HOST" $CLUSTER_MODE --rfr no \
         --dataset "$binary_file" \
         -t vec-ground-truth --search --vector-dim "$dims" \
         --search-name "$index_name" --search-prefix "$prefix" \
-        -n "$expected_vectors" -c 10 --clean 2>&1 | tee "$insertion_output"; then
+        -n "$expected_vectors" -c 10 --clean > "$insertion_output" 2>&1; then
 
         print_error "Failed to insert dataset"
         echo "Error output:"
@@ -258,6 +261,11 @@ insert_dataset() {
         rm -f "$insertion_output"
         exit 1
     fi
+
+    # Display final status
+    echo ""
+    echo "Insertion completed. Final status:"
+    tail -5 "$insertion_output"
 
     # Check for successful completion in output
     if ! grep -q "Dataset loaded" "$insertion_output"; then
@@ -320,7 +328,7 @@ run_ef_search_tests() {
 
     # Generate proper index name
     local index_name=$(generate_index_name "$dataset_name")
-    local results_file="ef_search_results_${dataset_name}_$(date +%Y%m%d_%H%M%S).csv"
+    local results_file="${RESULTS_DIR}/ef_search_results_${dataset_name}_$(date +%Y%m%d_%H%M%S).csv"
 
     print_header "Testing ef_search performance for $dataset_name"
     echo "  Index: $index_name"
@@ -541,7 +549,7 @@ if [ ${#SELECTED_DATASETS[@]} -gt 1 ] && [ "$INSERT_ONLY" = false ]; then
 
     for dataset_name in "${SELECTED_DATASETS[@]}"; do
         # Find the most recent results file for this dataset
-        LATEST_RESULTS=$(ls -t ef_search_results_${dataset_name}_*.csv 2>/dev/null | head -1)
+        LATEST_RESULTS=$(ls -t "${RESULTS_DIR}"/ef_search_results_${dataset_name}_*.csv 2>/dev/null | head -1)
 
         if [ -f "$LATEST_RESULTS" ]; then
             IFS=',' read -r prefix dims vectors k_neighbors <<< "${DATASET_CONFIG[$dataset_name]:-}"

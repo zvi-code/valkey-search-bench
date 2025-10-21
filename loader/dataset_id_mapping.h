@@ -12,7 +12,7 @@
 #ifndef VECTOR_ID_MAPPING_H
 #define VECTOR_ID_MAPPING_H
 
-#include "cluster-scan.h"
+#include "mapping_scan.h"
 #include <stdint.h>
 
 /* Forward declaration to avoid circular dependency */

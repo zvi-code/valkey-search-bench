@@ -59,8 +59,8 @@
  * - Network efficiency: Batched SCAN commands reduce round trips
  */
 
-#include "cluster-scan.h"
-#include "valkey-benchmark-utils.h"
+#include "mapping_scan.h"
+#include "search_utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

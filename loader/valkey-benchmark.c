@@ -28,9 +28,9 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "valkey-benchmark-utils.h"
+#include "search_utils.h"
 #include "dataset_api.h"
-#include "vector-id-mapping.h"
+#include "dataset_id_mapping.h"
 #include "fmacros.h"
 #include "load_optimizer.h"
 #include <stdio.h>
@@ -337,7 +337,7 @@ typedef struct benchmarkThread {
 
 
 
-/* Cluster - clusterNode is now defined in valkey-benchmark-utils.h */
+/* Cluster - clusterNode is now defined in search_utils.h */
 
 typedef struct serverConfig {
     sds save;

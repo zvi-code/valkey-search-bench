@@ -13,10 +13,10 @@
  * BSD 3-Clause License. See the LICENSE file in the root directory.
  */
 
-#include "vector-id-mapping.h"
-#include "cluster-scan.h"
+#include "dataset_id_mapping.h"
+#include "mapping_scan.h"
 #include "zmalloc.h"
-#include "progress-bar.h"
+#include "utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -12,7 +12,7 @@
  * BSD 3-Clause License. See the LICENSE file in the root directory.
  */
 
-#include "progress-bar.h"
+#include "utils.h"
 #include "zmalloc.h"
 #include <stdio.h>
 #include <stdlib.h>

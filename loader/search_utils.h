@@ -28,7 +28,7 @@ typedef enum {
 /* Forward declarations */
 struct serverConfig;
 
-/* Cluster node - shared between valkey-benchmark.c and valkey-benchmark-utils.c */
+/* Cluster node - shared between valkey-benchmark.c and search_utils.c */
 typedef struct clusterNode {
     valkeyContext *ctx;
     char *ip;

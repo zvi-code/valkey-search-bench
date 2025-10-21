@@ -19,12 +19,12 @@ This is the **standalone Valkey Vector Benchmark** package - a specialized toolk
 **Benchmark & Search**:
 - `src/valkey-benchmark.c` - Main benchmark tool (focus on search functionality)
 - `src/valkey-benchmark-vgen.{c,h}` - Vector generator integration
-- `src/valkey-benchmark-utils.{c,h}` - Shared cluster utilities
+- `src/search_utils.{c,h}` - Shared cluster utilities
 
 **Dataset Infrastructure**:
 - `src/dataset_api.{c,h}` - Binary dataset format reader (4KB-aligned headers)
-- `src/cluster-scan.{c,h}` - Generic parallel cluster scanner framework
-- `src/vector-id-mapping.{c,h}` - Vector ID to cluster tag mapping
+- `src/mapping_scan.{c,h}` - Generic parallel cluster scanner framework
+- `src/dataset_id_mapping.{c,h}` - Vector ID to cluster tag mapping
 
 **Core Utilities** (from Valkey):
 - `src/core/` - Essential Valkey utilities (zmalloc, sds, dict, etc.)
@@ -81,8 +81,8 @@ typedef struct {
 **Purpose**: Enable recall validation in Redis cluster mode by tracking vector ID → cluster tag mappings.
 
 **Components**:
-- `src/cluster-scan.{c,h}` - Generic parallel cluster scanner framework
-- `src/vector-id-mapping.{c,h}` - Vector-specific key processing
+- `src/mapping_scan.{c,h}` - Generic parallel cluster scanner framework
+- `src/dataset_id_mapping.{c,h}` - Vector-specific key processing
 - `src/cluster-utils.{c,h}` - Shared key parsing utilities
 
 **How It Works**:
@@ -327,7 +327,7 @@ Read in this order for fastest onboarding:
 **Core benchmark code**:
 - `src/valkey-benchmark.c` - Main benchmark tool (search functionality)
 - `src/valkey-benchmark-vgen.{c,h}` - Vector generator integration
-- `src/valkey-benchmark-utils.{c,h}` - Shared cluster utilities
+- `src/search_utils.{c,h}` - Shared cluster utilities
 
 **Core utilities** (from Valkey):
 - `src/core/` - Essential Valkey utilities (zmalloc, sds, dict, etc.)
@@ -338,8 +338,8 @@ Read in this order for fastest onboarding:
 - `convert_parquet_to_hdf5.py` - Parquet→HDF5 (memory-optimized)
 
 **Cluster utilities**:
-- `src/cluster-scan.{c,h}` - Generic parallel scanner
-- `src/vector-id-mapping.{c,h}` - Vector ID extraction
+- `src/mapping_scan.{c,h}` - Generic parallel scanner
+- `src/dataset_id_mapping.{c,h}` - Vector ID extraction
 
 **Testing infrastructure**:
 - `vector-testing/*` - Multi-dataset test scripts
@@ -401,8 +401,8 @@ Read in this order for fastest onboarding:
 # ✅ Good commit message format:
 git commit -m "Add parallel cluster scanner for vector ID mapping
 
-- Implement generic cluster-scan framework with callbacks
-- Add vector-id-mapping module for recall validation
+- Implement generic mapping_scan framework with callbacks
+- Add dataset_id_mapping module for recall validation
 - Update DATASET_TESTING_GUIDE.md with cluster scanning section
 - Performance: 1M+ keys/sec scanning rate"
 ```
@@ -437,7 +437,7 @@ git commit -m "Add parallel cluster scanner for vector ID mapping
 
 **Example good response**:
 ```
-Updated cluster-scan.c with batch size optimization.
+Updated mapping_scan.c with batch size optimization.
 Build successful. Updated CLUSTER_SCANNING_ARCHITECTURE.md section 3.2.
 ```
 
@@ -509,7 +509,7 @@ typedef struct {
 } dataset_header_t;
 ```
 
-**Parallel cluster scan** (`cluster-scan.c`):
+**Parallel cluster scan** (`mapping_scan.c`):
 ```c
 clusterScanConfig config = {
     .match_pattern = "zvec_*",
@@ -521,7 +521,7 @@ clusterScanConfig config = {
 scanCluster(&config, &results);
 ```
 
-**Vector ID mapping integration** (`vector-id-mapping.c`):
+**Vector ID mapping integration** (`dataset_id_mapping.c`):
 ```c
 // Extract vector ID and cluster tag from key
 // Format: "zvec_large_{06S}:000000000123456"
