@@ -94,15 +94,17 @@ best = wrapper.find_max_qps_with_constraints(
 
 ### run_queries.py
 
-**Auto-optimized query benchmark** - simplest interface, only requires dataset and host:
+**Auto-optimized query benchmark** - simplest interface, only requires dataset name and host:
 
 ```bash
 # Simplest usage - automatic optimization
 ./bench/scripts/run_queries.py \
     --host localhost \
-    --dataset datasets/sift-128.bin
+    --dataset openai-large-5m
 
 # The script automatically:
+#   - Finds dataset in datasets/ directory
+#   - Uses dataset name as index name
 #   - Detects dataset dimensions and size
 #   - Estimates optimal ef_search range
 #   - Finds optimal num_clients via binary search

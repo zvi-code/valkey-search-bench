@@ -16,17 +16,18 @@ The script:
 4. Reports results and the exact command used
 
 Example usage:
-    # Simple - just dataset and host
-    ./run_queries.py --host localhost --dataset datasets/sift-128.bin
+    # Simple - just dataset name and host
+    ./run_queries.py --host localhost --dataset openai-large-5m
     
     # With custom target recall
-    ./run_queries.py --host localhost --dataset datasets/sift-128.bin --target-recall 0.98
+    ./run_queries.py --host localhost --dataset sift-128 --target-recall 0.98
 """
 
 import sys
 import argparse
 from pathlib import Path
 import struct
+import os
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -39,24 +40,107 @@ from wrappers import (
 )
 
 
+def find_dataset_path(dataset_name: str) -> str:
+    """Find dataset file path from dataset name.
+    
+    Looks for dataset in standard locations:
+    1. datasets/ directory (relative to script)
+    2. BENCHMARK_HOME/datasets/ if BENCHMARK_HOME is set
+    3. Current directory
+    
+    Args:
+        dataset_name: Dataset name (e.g., "openai-large-5m", "sift-128")
+    
+    Returns:
+        Full path to dataset file
+    
+    Raises:
+        BenchmarkError: If dataset file not found
+    """
+    # Try with and without .bin extension
+    candidates = [dataset_name]
+    if not dataset_name.endswith('.bin'):
+        candidates.append(f"{dataset_name}.bin")
+    
+    # Standard search locations
+    script_dir = Path(__file__).parent.parent.parent  # Go up to project root
+    search_paths = [
+        script_dir / "datasets",
+    ]
+    
+    # Add BENCHMARK_HOME if set
+    if benchmark_home := os.getenv("BENCHMARK_HOME"):
+        search_paths.insert(0, Path(benchmark_home) / "datasets")
+    
+    # Also try current directory
+    search_paths.append(Path.cwd())
+    
+    # Search for dataset file
+    for search_dir in search_paths:
+        for candidate in candidates:
+            dataset_path = search_dir / candidate
+            if dataset_path.exists():
+                return str(dataset_path)
+    
+    # If not found, provide helpful error
+    raise BenchmarkError(
+        f"Dataset '{dataset_name}' not found. Searched in:\n" +
+        "\n".join(f"  - {p}" for p in search_paths) +
+        f"\n\nTried filenames: {', '.join(candidates)}"
+    )
+
+
 def detect_dataset_info(dataset_path: str) -> tuple:
     """Detect dataset dimensions and size from binary file.
     
-    Binary format: [num_vectors][dimensions][vector_data...]
+    Binary format (valkey-search-benchmark custom format):
+        Header (4KB):
+            uint32_t magic (0xDECDB001)
+            uint32_t version
+            char dataset_name[256]
+            uint8_t distance_metric
+            uint8_t dtype
+            uint8_t has_metadata
+            uint8_t padding
+            uint32_t dim
+            uint64_t num_vectors
+            uint64_t num_queries
+            ...
     
     Returns:
         (num_vectors, dimensions)
     """
     try:
         with open(dataset_path, 'rb') as f:
-            num_vectors = struct.unpack('i', f.read(4))[0]
-            dimensions = struct.unpack('i', f.read(4))[0]
+            # Read magic number
+            magic = struct.unpack('I', f.read(4))[0]
+            
+            if magic != 0xDECDB001:
+                raise ValueError(f"Invalid magic number: 0x{magic:08X} (expected 0xDECDB001)")
+            
+            # Read version
+            version = struct.unpack('I', f.read(4))[0]
+            
+            # Skip dataset_name[256]
+            f.seek(256, 1)
+            
+            # Skip distance_metric, dtype, has_metadata, padding (4 bytes total)
+            f.seek(4, 1)
+            
+            # Read dim (uint32_t)
+            dimensions = struct.unpack('I', f.read(4))[0]
+            
+            # Read num_vectors (uint64_t)
+            num_vectors = struct.unpack('Q', f.read(8))[0]
+            
         return num_vectors, dimensions
+        
     except Exception as e:
         # Fallback - try to infer from filename
         filename = Path(dataset_path).stem
         
-        # Common patterns: sift-128, glove-50, etc.
+        # Common patterns: sift-128, glove-50, openai-large-5m, etc.
+        # Try to extract dimension from filename
         if '-' in filename:
             parts = filename.split('-')
             for part in parts:
@@ -125,13 +209,13 @@ def main():
         epilog="""
 Examples:
   # Simplest usage - automatic optimization
-  %(prog)s --host localhost --dataset datasets/sift-128.bin
+  %(prog)s --host localhost --dataset openai-large-5m
   
   # With custom target recall
-  %(prog)s --host localhost --dataset datasets/sift-128.bin --target-recall 0.98
+  %(prog)s --host localhost --dataset sift-128 --target-recall 0.98
   
   # With custom number of requests
-  %(prog)s --host localhost --dataset datasets/sift-128.bin --num-requests 50000
+  %(prog)s --host localhost --dataset cohere-large-10m --num-requests 50000
 
 The script automatically:
   - Detects dataset dimensions and size
@@ -151,7 +235,8 @@ The script automatically:
     parser.add_argument(
         "--dataset",
         required=True,
-        help="Path to binary dataset file"
+        help="Dataset name (e.g., 'openai-large-5m', 'sift-128'). "
+             "Will be used as index name and searched in datasets/ directory"
     )
     
     # Optional tuning
@@ -196,8 +281,13 @@ The script automatically:
     if args.target_recall < 0.0 or args.target_recall > 1.0:
         parser.error("--target-recall must be between 0.0 and 1.0")
     
-    if not Path(args.dataset).exists():
-        parser.error(f"Dataset file not found: {args.dataset}")
+    # Find dataset file
+    dataset_name = args.dataset
+    try:
+        dataset_path = find_dataset_path(dataset_name)
+    except BenchmarkError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
     
     # Initialize wrapper
     try:
@@ -209,14 +299,16 @@ The script automatically:
     print(f"\n{'='*70}")
     print(f"Auto-Optimized Query Benchmark")
     print(f"{'='*70}")
-    print(f"Host:    {args.host}")
-    print(f"Dataset: {args.dataset}")
+    print(f"Host:        {args.host}")
+    print(f"Dataset:     {dataset_name}")
+    print(f"Index Name:  {dataset_name}")
+    print(f"File Path:   {dataset_path}")
     print(f"{'='*70}\n")
     
     # Step 1: Detect dataset properties
     print("📊 Detecting dataset properties...")
     try:
-        num_vectors, dimensions = detect_dataset_info(args.dataset)
+        num_vectors, dimensions = detect_dataset_info(dataset_path)
         if num_vectors:
             print(f"   Vectors:    {num_vectors:,}")
         print(f"   Dimensions: {dimensions}")
@@ -264,12 +356,13 @@ The script automatically:
         
         base_config = BenchmarkConfig(
             host=args.host,
-            dataset=args.dataset,
+            dataset=dataset_path,
             num_clients=10,  # Start conservative
             num_threads=num_threads,
             num_requests=args.num_requests,
             ef_search=ef_search,
             operation="vec-query",
+            extra_args=["--search-name", dataset_name]  # Use dataset name as index name
         )
         
         if args.skip_optimization:
@@ -359,7 +452,8 @@ The script automatically:
         cluster_flag = "--cluster" if wrapper._detect_cluster(args.host) else ""
         cmd = (
             f"{wrapper.binary} -t vec-query -h {args.host} "
-            f"--dataset {args.dataset} "
+            f"--dataset {dataset_path} "
+            f"--search-name {dataset_name} "
             f"-c {best_result.config.num_clients} "
             f"--threads {best_result.config.num_threads} "
             f"-n {best_result.config.num_requests} "
