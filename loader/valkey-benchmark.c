@@ -440,6 +440,11 @@ static struct config {
     int save_config;              /* Save configuration after successful run */
     int no_save_config;           /* Skip saving configuration */
     
+    /* Runtime configuration management */
+    sds runtime_config_file;      /* Path to runtime config file */
+    runtimeConfigContext *runtime_config_ctx; /* Runtime config context */
+    int restore_runtime_config;   /* Restore original config after benchmark */
+    
     /* Baseline latency measurement */
     int measure_baseline;         /* Measure baseline network latency (default: 1) */
     int no_baseline;              /* Disable baseline measurement */
@@ -4188,6 +4193,12 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--optimize-min-requests")) {
             if (lastarg) goto invalid;
             config.optimize_min_requests = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--runtime-config")) {
+            if (lastarg) goto invalid;
+            if (config.runtime_config_file) sdsfree(config.runtime_config_file);
+            config.runtime_config_file = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--restore-config")) {
+            config.restore_runtime_config = 1;
         } else if (!strcmp(argv[i], "--search-print-results")) {
             config.print_search_results = 1;
         } else if (!strcmp(argv[i], "--search-prefix")) {
@@ -4392,7 +4403,6 @@ usage:
         "                    - vec-query: Query vectors using KNN search\n"
         "                    - vec-del: Delete vectors from the index\n"
         "                    - vec-scan-q-verify: Query with vectors and verify self-recall\n"
-        "                      (Currently uses same approach as vec-query with recall tracking)\n"
         " --search-print-results Print the search results returned by FT.SEARCH queries.\n"
         " --ef-search <value> Set the EF_RUNTIME parameter for KNN queries. (default 200)\n"
         " --vector-dim <dim> Set the dimension of the vector index. Dim must be > 16. (default 128)\n"
@@ -4442,7 +4452,13 @@ usage:
         " --optimize-max-iterations <num>\n"
         "                    Maximum number of optimization iterations (default 50).\n"
         " --optimize-min-requests <num>\n"
-        "                    Minimum requests per benchmark run during optimization (default 1000).\n";
+        "                    Minimum requests per benchmark run during optimization (default 1000).\n"
+        "\n"
+        "Runtime Configuration Options:\n"
+        " --runtime-config <file>\n"
+        "                    Apply server-side configurations from file before benchmark.\n"
+        "                    Configurations are applied to all cluster nodes.\n"
+        " --restore-config   Restore original server configurations after benchmark completes.\n";
     printf(
         "%s%s%s%s%s%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
         "Usage: valkey-benchmark [OPTIONS] [--] [COMMAND ARGS...]\n\n"
@@ -5234,6 +5250,23 @@ int main(int argc, char **argv) {
         }
     }
     
+    /* Apply runtime configuration if specified */
+    if (config.runtime_config_file) {
+        config.runtime_config_ctx = loadRuntimeConfig(config.runtime_config_file);
+        if (config.runtime_config_ctx) {
+            int applied = applyRuntimeConfig(config.runtime_config_ctx,
+                                            config.cluster_node_count,
+                                            config.cluster_nodes,
+                                            config.ct,
+                                            !config.quiet);
+            if (applied > 0 && !config.quiet) {
+                printf("Successfully applied %d runtime configuration settings\n", applied);
+            } else if (applied < 0) {
+                fprintf(stderr, "Warning: Failed to apply runtime configuration\n");
+            }
+        }
+    }
+    
     /* Initialize optimizer if enabled */
     if (config.optimize_enabled) {
         if (!config.optimize_objective) {
@@ -5726,6 +5759,27 @@ int main(int argc, char **argv) {
     if (config.server_config != NULL) freeServerConfig(config.server_config);
     if (base_vector != NULL) zfree(base_vector);
     resetPlaceholders();
+    
+    /* Restore runtime configuration if requested */
+    if (config.restore_runtime_config && config.runtime_config_ctx) {
+        if (!config.quiet) {
+            printf("\nRestoring original server configuration...\n");
+        }
+        int restored = restoreRuntimeConfig(config.runtime_config_ctx,
+                                           config.cluster_node_count,
+                                           config.cluster_nodes,
+                                           config.ct,
+                                           !config.quiet);
+        if (restored > 0 && !config.quiet) {
+            printf("Successfully restored %d configuration settings\n", restored);
+        }
+    }
+    
+    /* Free runtime configuration context */
+    if (config.runtime_config_ctx) {
+        freeRuntimeConfig(config.runtime_config_ctx);
+        config.runtime_config_ctx = NULL;
+    }
     
     /* Print dataset recall statistics if dataset mode was used */
     printDatasetRecallStats();

@@ -2355,3 +2355,326 @@ void* compareInfoSnapshots(int cluster_node_count, clusterNode **cluster_nodes,
     compareClusterSnapshots(old_infosearch, new_snap_infosearch, search_num_fields, search_info_fields);
     return NULL;
 }
+
+/* ============================================================================
+ * Runtime Configuration Management
+ * 
+ * Allows applying server-side configurations before running benchmarks.
+ * Configurations are read from a simple .conf file with key=value pairs.
+ * ============================================================================ */
+
+#define RUNTIME_CONFIG_INITIAL_CAPACITY 16
+#define MAX_CONFIG_LINE_LENGTH 4096
+
+/* Load runtime configuration from file */
+runtimeConfigContext* loadRuntimeConfig(const char *config_file) {
+    if (!config_file) {
+        return NULL;
+    }
+
+    FILE *fp = fopen(config_file, "r");
+    if (!fp) {
+        fprintf(stderr, "Warning: Could not open runtime config file: %s\n", config_file);
+        return NULL;
+    }
+
+    runtimeConfigContext *ctx = zmalloc(sizeof(runtimeConfigContext));
+    ctx->entries = zmalloc(sizeof(runtimeConfigEntry) * RUNTIME_CONFIG_INITIAL_CAPACITY);
+    ctx->num_entries = 0;
+    ctx->capacity = RUNTIME_CONFIG_INITIAL_CAPACITY;
+    ctx->applied = 0;
+
+    char line[MAX_CONFIG_LINE_LENGTH];
+    int line_num = 0;
+
+    while (fgets(line, sizeof(line), fp)) {
+        line_num++;
+        
+        /* Remove newline */
+        size_t len = strlen(line);
+        if (len > 0 && line[len-1] == '\n') {
+            line[len-1] = '\0';
+            len--;
+        }
+        if (len > 0 && line[len-1] == '\r') {
+            line[len-1] = '\0';
+            len--;
+        }
+
+        /* Skip empty lines and comments */
+        char *p = line;
+        while (*p && (*p == ' ' || *p == '\t')) p++;
+        if (*p == '\0' || *p == '#') {
+            continue;
+        }
+
+        /* Find the separator (space or =) */
+        char *key_start = p;
+        char *sep = p;
+        while (*sep && *sep != ' ' && *sep != '\t' && *sep != '=') sep++;
+        if (*sep == '\0') {
+            fprintf(stderr, "Warning: Invalid config line %d (no value): %s\n", line_num, line);
+            continue;
+        }
+
+        /* Extract key */
+        size_t key_len = sep - key_start;
+        char *key = zmalloc(key_len + 1);
+        memcpy(key, key_start, key_len);
+        key[key_len] = '\0';
+
+        /* Skip separator(s) */
+        while (*sep && (*sep == ' ' || *sep == '\t' || *sep == '=')) sep++;
+        if (*sep == '\0') {
+            fprintf(stderr, "Warning: Invalid config line %d (empty value): %s\n", line_num, line);
+            zfree(key);
+            continue;
+        }
+
+        /* Extract value (rest of line, trim trailing whitespace) */
+        char *value_start = sep;
+        char *value_end = line + len - 1;
+        while (value_end > value_start && (*value_end == ' ' || *value_end == '\t')) {
+            value_end--;
+        }
+        size_t value_len = value_end - value_start + 1;
+        char *value = zmalloc(value_len + 1);
+        memcpy(value, value_start, value_len);
+        value[value_len] = '\0';
+
+        /* Expand capacity if needed */
+        if (ctx->num_entries >= ctx->capacity) {
+            ctx->capacity *= 2;
+            ctx->entries = zrealloc(ctx->entries, sizeof(runtimeConfigEntry) * ctx->capacity);
+        }
+
+        /* Store entry */
+        ctx->entries[ctx->num_entries].key = key;
+        ctx->entries[ctx->num_entries].value = value;
+        ctx->entries[ctx->num_entries].original_value = NULL;
+        ctx->num_entries++;
+    }
+
+    fclose(fp);
+
+    if (ctx->num_entries == 0) {
+        fprintf(stderr, "Warning: No valid configuration entries found in %s\n", config_file);
+        freeRuntimeConfig(ctx);
+        return NULL;
+    }
+
+    return ctx;
+}
+
+/* Apply runtime configuration to a single node */
+static int applyConfigToNode(runtimeConfigContext *ctx, valkeyContext *node_ctx, 
+                              const char *node_name, int verbose) {
+    int success_count = 0;
+    int error_count = 0;
+
+    for (int i = 0; i < ctx->num_entries; i++) {
+        runtimeConfigEntry *entry = &ctx->entries[i];
+        
+        /* Get current value first (for restoration later) */
+        if (!entry->original_value) {
+            valkeyReply *get_reply = valkeyCommand(node_ctx, "CONFIG GET %s", entry->key);
+            if (get_reply && get_reply->type == VALKEY_REPLY_ARRAY && get_reply->elements == 2) {
+                /* CONFIG GET returns [key, value] */
+                if (get_reply->element[1]->type == VALKEY_REPLY_STRING) {
+                    entry->original_value = sdsnew(get_reply->element[1]->str);
+                }
+            }
+            if (get_reply) freeReplyObject(get_reply);
+        }
+
+        /* Apply new configuration */
+        valkeyReply *reply = valkeyCommand(node_ctx, "CONFIG SET %s %s", 
+                                          entry->key, entry->value);
+        
+        if (!reply) {
+            fprintf(stderr, "Error: Failed to set config %s on %s: Connection error\n",
+                    entry->key, node_name);
+            error_count++;
+            continue;
+        }
+
+        if (reply->type == VALKEY_REPLY_ERROR) {
+            fprintf(stderr, "Error: Failed to set config %s=%s on %s: %s\n",
+                    entry->key, entry->value, node_name, reply->str);
+            error_count++;
+        } else {
+            if (verbose) {
+                printf("✓ Set %s = %s on %s", entry->key, entry->value, node_name);
+                if (entry->original_value) {
+                    printf(" (was: %s)", entry->original_value);
+                }
+                printf("\n");
+            }
+            success_count++;
+        }
+
+        freeReplyObject(reply);
+    }
+
+    if (error_count > 0) {
+        fprintf(stderr, "Warning: %d/%d configurations failed on %s\n", 
+                error_count, ctx->num_entries, node_name);
+    }
+
+    return success_count;
+}
+
+/* Apply runtime configuration to server(s) */
+int applyRuntimeConfig(runtimeConfigContext *ctx, 
+                       int cluster_node_count, 
+                       clusterNode **cluster_nodes,
+                       enum valkeyConnectionType ct,
+                       int verbose) {
+    if (!ctx || ctx->num_entries == 0) {
+        return 0;
+    }
+
+    if (verbose) {
+        printf("\n=== Applying Runtime Configuration ===\n");
+        printf("Configuration entries: %d\n", ctx->num_entries);
+    }
+
+    int total_applied = 0;
+
+    if (cluster_node_count > 0 && cluster_nodes) {
+        /* Apply to all cluster nodes */
+        for (int i = 0; i < cluster_node_count; i++) {
+            if (!cluster_nodes[i] || !cluster_nodes[i]->ctx) {
+                continue;
+            }
+            
+            char node_name[256];
+            snprintf(node_name, sizeof(node_name), "%s:%d", 
+                     cluster_nodes[i]->ip, cluster_nodes[i]->port);
+            
+            int applied = applyConfigToNode(ctx, cluster_nodes[i]->ctx, node_name, verbose);
+            total_applied += applied;
+        }
+    } else {
+        /* Single node mode - would need to be passed separately */
+        fprintf(stderr, "Warning: No cluster nodes provided for config application\n");
+        return -1;
+    }
+
+    ctx->applied = 1;
+
+    if (verbose) {
+        printf("Total configurations applied: %d\n", total_applied);
+        printf("=====================================\n\n");
+    }
+
+    return total_applied;
+}
+
+/* Restore configuration on a single node */
+static int restoreConfigOnNode(runtimeConfigContext *ctx, valkeyContext *node_ctx,
+                                const char *node_name, int verbose) {
+    int success_count = 0;
+    int error_count = 0;
+
+    for (int i = 0; i < ctx->num_entries; i++) {
+        runtimeConfigEntry *entry = &ctx->entries[i];
+        
+        if (!entry->original_value) {
+            /* No original value saved, skip restoration */
+            continue;
+        }
+
+        valkeyReply *reply = valkeyCommand(node_ctx, "CONFIG SET %s %s",
+                                          entry->key, entry->original_value);
+        
+        if (!reply) {
+            fprintf(stderr, "Error: Failed to restore config %s on %s: Connection error\n",
+                    entry->key, node_name);
+            error_count++;
+            continue;
+        }
+
+        if (reply->type == VALKEY_REPLY_ERROR) {
+            fprintf(stderr, "Error: Failed to restore config %s=%s on %s: %s\n",
+                    entry->key, entry->original_value, node_name, reply->str);
+            error_count++;
+        } else {
+            if (verbose) {
+                printf("✓ Restored %s = %s on %s\n", 
+                       entry->key, entry->original_value, node_name);
+            }
+            success_count++;
+        }
+
+        freeReplyObject(reply);
+    }
+
+    return success_count;
+}
+
+/* Restore original configuration */
+int restoreRuntimeConfig(runtimeConfigContext *ctx,
+                         int cluster_node_count,
+                         clusterNode **cluster_nodes,
+                         enum valkeyConnectionType ct,
+                         int verbose) {
+    if (!ctx || !ctx->applied) {
+        return 0;
+    }
+
+    if (verbose) {
+        printf("\n=== Restoring Original Configuration ===\n");
+    }
+
+    int total_restored = 0;
+
+    if (cluster_node_count > 0 && cluster_nodes) {
+        for (int i = 0; i < cluster_node_count; i++) {
+            if (!cluster_nodes[i] || !cluster_nodes[i]->ctx) {
+                continue;
+            }
+            
+            char node_name[256];
+            snprintf(node_name, sizeof(node_name), "%s:%d",
+                     cluster_nodes[i]->ip, cluster_nodes[i]->port);
+            
+            int restored = restoreConfigOnNode(ctx, cluster_nodes[i]->ctx, node_name, verbose);
+            total_restored += restored;
+        }
+    }
+
+    ctx->applied = 0;
+
+    if (verbose) {
+        printf("Total configurations restored: %d\n", total_restored);
+        printf("========================================\n\n");
+    }
+
+    return total_restored;
+}
+
+/* Free runtime configuration context */
+void freeRuntimeConfig(runtimeConfigContext *ctx) {
+    if (!ctx) {
+        return;
+    }
+
+    for (int i = 0; i < ctx->num_entries; i++) {
+        if (ctx->entries[i].key) {
+            zfree(ctx->entries[i].key);
+        }
+        if (ctx->entries[i].value) {
+            zfree(ctx->entries[i].value);
+        }
+        if (ctx->entries[i].original_value) {
+            sdsfree(ctx->entries[i].original_value);
+        }
+    }
+
+    if (ctx->entries) {
+        zfree(ctx->entries);
+    }
+
+    zfree(ctx);
+}

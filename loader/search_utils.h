@@ -150,4 +150,38 @@ void waitForIndexBackfillComplete(EngineType engine_type, int cluster_node_count
 EngineType getEngineType(const char *ip_or_path, int port, enum valkeyConnectionType ct);
 int isClusterModeEnabled(valkeyContext *ctx);
 
+/* Runtime Configuration Management */
+typedef struct runtimeConfigEntry {
+    char *key;
+    char *value;
+    char *original_value;  /* Store original value for restoration */
+} runtimeConfigEntry;
+
+typedef struct runtimeConfigContext {
+    runtimeConfigEntry *entries;
+    int num_entries;
+    int capacity;
+    int applied;  /* Whether configs have been applied */
+} runtimeConfigContext;
+
+/* Load runtime configuration from file */
+runtimeConfigContext* loadRuntimeConfig(const char *config_file);
+
+/* Apply runtime configuration to server(s) */
+int applyRuntimeConfig(runtimeConfigContext *ctx, 
+                       int cluster_node_count, 
+                       clusterNode **cluster_nodes,
+                       enum valkeyConnectionType ct,
+                       int verbose);
+
+/* Restore original configuration */
+int restoreRuntimeConfig(runtimeConfigContext *ctx,
+                         int cluster_node_count,
+                         clusterNode **cluster_nodes,
+                         enum valkeyConnectionType ct,
+                         int verbose);
+
+/* Free runtime configuration context */
+void freeRuntimeConfig(runtimeConfigContext *ctx);
+
 #endif /* __VALKEY_BENCHMARK_UTILS_H */

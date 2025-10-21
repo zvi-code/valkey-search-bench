@@ -19,22 +19,33 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Description:** Generate ground truth vectors using flat search for existing indexes.  
 **Benefits:** Allows creation of ground truth data without external dependencies.
 
-### 4. Runtime Configuration Management
-**Status:** Planned  
-**Description:** Add ability to set configurations before a test is run, including:
+### 4. ~~Runtime Configuration Management~~
+**Status:** ✅ Completed  
+**Description:** Add ability to set server-side configurations before a test is run, including:
 - IO threads
-- Number of worker threads
+- Number of worker threads  
 - Other engine-side configurations
 
-**Benefits:** More flexible testing scenarios without manual server configuration changes.
+**Implementation:** Configuration file format uses simple key-value pairs (e.g., `io-threads 4`). Configurations are loaded from a file specified by `--runtime-config` and applied to all cluster nodes before benchmarks start. Original values are saved and can be restored after benchmarks using `--restore-config`. Works in both cluster and standalone modes.
+
+**Usage Examples:**
+```bash
+# Apply configurations before benchmark
+./valkey-benchmark -h localhost -t ping --runtime-config my-config.conf
+
+# Apply and restore after benchmark
+./valkey-benchmark -h localhost -t ping --runtime-config my-config.conf --restore-config
+```
+
+**Benefits:** More flexible testing scenarios without manual server configuration changes. Enables automated testing of different server configurations.
 
 ### 5. Test Stage and Tag Reporting
 **Status:** Planned  
 **Description:** Report `test stage` and `test tag` for external tools to collect profiling data.  
 **Benefits:** Better integration with profiling and monitoring tools; easier correlation of metrics with test phases.
 
-### 6. Persistent Configuration Storage
-**Status:** Planned  
+### 6. ~~Persistent Configuration Storage~~
+**Status:** Done  
 **Description:** Save last configuration in a file. If file exists, use the configuration for any argument not provided by the user.  
 **Exclusions:** Should NOT include:
 - `-t` option (the command)
@@ -103,12 +114,79 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Description:** Add support for mixed workloads involving different operation types (e.g., search, insert, delete) in a single benchmark run. This will also support having non-search operations running in the background while search operations are being benchmarked.
 **Benefits:** More realistic testing scenarios that mimic production workloads.
 
-### 24. Evaluate base latency
+### 24. ~~Evaluate base latency~~
 **Status:** ✅ Completed  
 **Description:** Measure baseline network latency using PING commands at the beginning of a benchmark run. The baseline is measured with 10,000 PING operations using single-threaded, single-client configuration to establish pure network RTT. The baseline latency is displayed separately and included in both console output and CSV exports, showing processing overhead (operation latency - baseline latency).
 **Benefits:** More accurate latency measurements by separating network overhead from operation-specific processing time.
 **Implementation:** Enabled by default (no flags needed). Runs silently before benchmarks. Use `--no-baseline` to disable. Results include avg, p50, p90, p95, p99, and max latencies in both console and CSV output.
 
+### 25. Support multiple clusters
+**Status:** Planned  
+**Description:** Add support for benchmarking across multiple Valkey clusters simultaneously.  
+**Benefits:** Enables testing of distributed scenarios and cluster interactions.
+
+### 26. Add additional search results quality metrics
+**Status:** Planned  
+**Description:** Implement additional metrics to evaluate the quality of search results beyond simple recall. These metrics provide deeper insights into ranking quality and relevance ordering:
+
+#### 🧮 1. **Mean Average Precision (MAP)**
+
+**Definition:**
+For each query, compute the *average precision* (AP), which takes into account the *rank positions* of the correct items. Then take the mean across queries.
+
+```
+AP = (1 / N_relevant) * Σ(k=1 to K) P@k · rel(k)
+```
+
+where `P@k` is the precision at rank `k`, and `rel(k)` is 1 if the item at rank `k` is relevant.
+
+MAP rewards algorithms that return correct items early in the ranking list — not just within top-k but near the top.
+
+**Use case:** Common in IR (information retrieval) and vector search evaluation when ranking quality matters.
+
+---
+
+#### 📈 2. **Normalized Discounted Cumulative Gain (NDCG)**
+
+**Definition:**
+Considers not just binary relevance (hit/miss) but also *graded* relevance (e.g., true rank distance).
+
+```
+DCG@k = Σ(i=1 to k) (2^rel_i - 1) / log₂(i + 1)
+NDCG@k = DCG@k / IDCG@k
+```
+
+Here, a relevant item appearing at rank 2 contributes less than at rank 1 due to the logarithmic discount. If your true neighbors are far down (e.g., rank 100,000), their contribution will be near zero.
+
+**Use case:** Standard metric in ranking and recommendation systems — measures how *well ordered* your retrieved results are.
+
+---
+
+#### 📊 3. **Mean Reciprocal Rank (MRR)**
+
+**Definition:**
+Measures how soon the *first* relevant item appears in the ranked list:
+
+```
+MRR = (1 / N) * Σ(i=1 to N) (1 / rank_i)
+```
+
+Useful when you mostly care about whether at least one good match is near the top.
+
+---
+
+#### 💡 4. **Rank-weighted Recall or Recall@R**
+
+Some papers also compute recall not just for the top-k results, but for *different depth thresholds* (e.g., recall@10, recall@100, recall@1000).
+Plotting this as a curve helps visualize how far the true neighbors are distributed.
+
+**Benefits:** 
+- More comprehensive evaluation of search quality
+- Ranking-aware metrics (MAP, NDCG, MRR) complement recall
+- Better understanding of result quality at different depth thresholds
+- Industry-standard metrics for comparison with other systems
+
+**Implementation:** Add these metrics alongside existing recall calculations, with options to enable/disable specific metrics and export results to CSV for analysis.
 
 ---
 ## Wrapper Scripts Enhancements
@@ -177,28 +255,31 @@ Implement a configuration persistence system that saves the last used configurat
 ### Design Decisions
 
 #### Configuration File
-- **Location**: `~/.valkey-benchmark/config.json` or `./.valkey-benchmark.json` (workspace-specific)
-- **Format**: JSON for human readability and easy parsing
-- **Scope**: User preference (global vs. workspace-local configuration)
+- **Location**: `~/.valkey-benchmark/config.conf` or `./.valkey-benchmark.conf` (workspace-specific)
+- **Format**: Simple key-value text format for easy parsing and human readability
+- **Scope**: Workspace-local takes priority, falls back to global user configuration
+- **Session support**: Can use `VALKEY_BENCHMARK_SESSION` environment variable for multiple independent configurations
 
 #### Storage Strategy
-```json
-{
-  "version": "1.0",
-  "last_updated": "2025-10-21T12:34:56Z",
-  "config": {
-    "dataset": "openai-large-5m",
-    "num_clients": 10,
-    "num_threads": 4,
-    "ef_search": 100,
-    "index_type": "HNSW",
-    "m": 16,
-    "ef_construction": 200,
-    "distance_metric": "L2",
-    "dimension": 1536,
-    "batch_size": 1000
-  }
-}
+```conf
+# Valkey Benchmark Configuration
+version 1.0
+last_updated 1729517696
+
+# Basic benchmark parameters
+num_clients 10
+num_threads 4
+pipeline 1
+requests 10000
+
+# Search parameters
+dataset openai-large-5m
+ef_search 100
+m 16
+ef_construction 200
+metric L2
+vector_dim 1536
+k 10
 ```
 
 #### Excluded Parameters
@@ -213,12 +294,14 @@ Must NOT be persisted:
 #### Phase 1: Core Infrastructure
 1. **Create configuration module** (`config_persist.c`, `config_persist.h`)
    - Define configuration structure
-   - Implement JSON serialization/deserialization (consider using cJSON or similar)
+   - Implement simple key-value text format parsing
    - Add file I/O functions (read/write/create)
+   - Support for comments and version tracking
 
 2. **Add configuration file path resolution**
-   - Check for workspace-local config first (`./.valkey-benchmark.json`)
-   - Fall back to user-global config (`~/.valkey-benchmark/config.json`)
+   - Check for workspace-local config first (`./.valkey-benchmark.conf`)
+   - Fall back to user-global config (`~/.valkey-benchmark/config.conf`)
+   - Support session-specific configs via `VALKEY_BENCHMARK_SESSION` env var
    - Create directories as needed
 
 3. **Implement configuration merge logic**
@@ -245,14 +328,14 @@ Must NOT be persisted:
 
 #### Phase 3: Validation and Error Handling
 1. **Configuration validation**
-   - Verify JSON structure on load
+   - Verify configuration format on load
    - Handle corrupted configuration files gracefully
    - Validate version compatibility
 
 2. **Error handling**
    - Gracefully handle missing files (first run)
    - Handle permission errors
-   - Handle invalid JSON
+   - Handle malformed configuration lines
    - Provide informative error messages
 
 3. **Migration support**
@@ -287,16 +370,17 @@ Must NOT be persisted:
 2. **Integration tests**
    - Test full workflow: save → load → override
    - Test workspace-local vs. global config precedence
+   - Test session-specific configurations
    - Test concurrent access (if applicable)
 
 3. **Edge cases**
    - Empty configuration file
    - Partial configuration
-   - Invalid JSON
+   - Malformed configuration lines
    - Permission issues
 
 ### Dependencies
-- JSON parsing library (cJSON, jansson, or similar)
+- Simple text parsing (no external libraries needed)
 - File system utilities (already present)
 - Configuration structure definitions
 

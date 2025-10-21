@@ -12,6 +12,7 @@ This package extracts the vector search benchmarking capabilities from the Valke
 - **Recall Validation**: Accurate recall measurement with missing neighbor reconstruction
 - **Performance Testing**: Throughput (QPS), latency (p50/p99), and recall analysis
 - **Baseline Network Latency**: Automatic network RTT measurement to separate network overhead from processing time
+- **Runtime Configuration**: Apply server-side configurations before benchmarks for automated testing
 - **Adaptive Optimization**: Automatic parameter tuning with multi-phase optimization (binary search + grid search)
 - **Parameter Tuning**: ef_search parameter sweep and exhaustive exploration
 
@@ -118,18 +119,20 @@ python prep_datasets/convert_parquet_to_hdf5.py \
 
 ## Documentation
 
-📚 **Complete documentation organized in 4 guides:**
+📚 **Complete documentation organized in 5 guides:**
 
 1. **[Installation Guide](docs/INSTALLATION.md)** - Setup, dependencies, and building
 2. **[Dataset Guide](docs/DATASETS.md)** - Downloading, converting, and managing datasets
 3. **[Benchmarking Guide](docs/BENCHMARKING.md)** - Running benchmarks and interpreting results
 4. **[Advanced Guide](docs/ADVANCED.md)** - Optimizer internals, metadata filtering, data formats
+5. **[Runtime Configuration](RUNTIME_CONFIG.md)** - Server-side configuration management
 
 **Quick navigation:**
 - New to the project? Start with [Installation](docs/INSTALLATION.md)
 - Need datasets? See [Dataset Guide](docs/DATASETS.md)
 - Running benchmarks? Check [Benchmarking Guide](docs/BENCHMARKING.md)
 - Advanced features? Read [Advanced Guide](docs/ADVANCED.md)
+- Server configuration? See [Runtime Configuration](RUNTIME_CONFIG.md)
 
 ## Features
 
@@ -457,6 +460,60 @@ Summary:
 - ✅ **Accurate analysis** - Separates network from processing latency
 - ✅ **CSV compatible** - Baseline columns included automatically
 - ✅ **Remote testing** - Essential for benchmarking remote clusters
+
+## Runtime Configuration Management
+
+Apply server-side configurations before running benchmarks to test performance under different settings automatically.
+
+### Quick Example
+
+```bash
+# Create a config file
+cat > perf-config.conf <<EOF
+io-threads 8
+tcp-backlog 4096
+maxclients 50000
+save ""
+appendonly no
+EOF
+
+# Run benchmark with runtime config
+./valkey-benchmark -h localhost -t vec-query \
+    --dataset openai-large-5m.bin \
+    --runtime-config perf-config.conf \
+    --restore-config
+```
+
+### Features
+
+- **Automatic Application**: Configs applied to all cluster nodes before benchmarks
+- **Original Value Preservation**: Saves original values automatically
+- **Restoration**: Optionally restore original configs after benchmarks
+- **Simple Format**: Key-value pairs like `io-threads 8` or `maxmemory 10gb`
+
+### Common Use Cases
+
+```bash
+# Test with different IO thread counts
+echo "io-threads 8" > config.conf
+./valkey-benchmark -t ping --runtime-config config.conf --restore-config
+
+# Optimize for vector search
+cat > vector-opt.conf <<EOF
+io-threads 8
+io-threads-do-reads yes
+maxmemory 20gb
+save ""
+appendonly no
+EOF
+./valkey-benchmark -t vec-query --runtime-config vector-opt.conf --restore-config
+
+# Test memory pressure scenarios
+echo "maxmemory 5gb" > memory-test.conf
+./valkey-benchmark -t vec-query --runtime-config memory-test.conf --restore-config
+```
+
+See [RUNTIME_CONFIG.md](RUNTIME_CONFIG.md) for detailed documentation.
 
 ## Project Structure
 
