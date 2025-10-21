@@ -115,7 +115,12 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Description:** Extend the benchmark tool to collect and report latency metrics for each individual node in a cluster environment, both in Cluster Mode Enabled (CME) and when using replicas in Cluster Mode Disabled (CMD).  
 **Benefits:** Provides deeper insights into performance variations across different nodes, helping identify bottlenecks and optimize cluster configurations.
 
-### 27. Add additional search results quality metrics
+### 27. Add better handling for out of sync replicas
+**Status:** Planned  
+**Description:** Improve the benchmark tool's handling of out-of-sync replicas by implementing detection mechanisms and appropriate response strategies. This may include skipping lagging replicas during benchmarks or providing detailed reporting on their status.  
+**Benefits:** Ensures more accurate benchmark results by avoiding the influence of lagging replicas and providing clearer insights into cluster health.
+
+### 28. Add additional search results quality metrics
 **Status:** Planned  
 **Description:** Implement additional metrics to evaluate the quality of search results beyond simple recall. These metrics provide deeper insights into ranking quality and relevance ordering:
 

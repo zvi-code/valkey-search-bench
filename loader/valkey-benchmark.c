@@ -413,8 +413,6 @@ static struct config {
     int print_search_results; /* Print FT.SEARCH results */
     int search_debug;
     EngineType engine_type; /* True if connected to MemoryDB */
-    int is_cluster_mode_enabled; /* 1 if cluster_enabled:1 (CME), 0 if cluster_enabled:0 (CMD), -1 if unknown */
-
     /* Dataset configuration */
     int use_dataset;              /* Enable dataset mode */
     int use_filtered_search;      /* Enable metadata filtering */
@@ -1853,20 +1851,23 @@ static void replacePlaceholderClusterTag(client c, const size_t *indices, const 
 static void createDefaultSearchIndexes(void) {    
     if (!config.use_search) return;
     // connect to a primary node
-    if (config.cluster_mode && config.cluster_primary_nodes[0]) {
+    if (config.cluster_primary_nodes[0]) {
         config.conn_info.hostip = config.cluster_primary_nodes[0]->ip;
         config.conn_info.hostport = config.cluster_primary_nodes[0]->port;
     }
-    valkeyContext *ctx = config.conn_ctx;
+    printf("[cluster-mode:%d] Creating search index '%s' on %s:%d if it does not exist...\n", 
+           config.cluster_mode, config.search.name, config.conn_info.hostip, config.conn_info.hostport);
+    fflush(stdout);
+    valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
+    // if (ctx == NULL) {
+    //     fprintf(stderr, "No existing connection context, creating new\n");
+    //     ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
     if (ctx == NULL) {
-        fprintf(stderr, "No existing connection context, creating new\n");
-        ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
-        if (ctx == NULL) {
-            fprintf(stderr, "Failed to connect to server for index creation\n");
-            fflush(stderr);
-            assert(0);
-        }
+        fprintf(stderr, "Failed to connect to server for index creation\n");
+        fflush(stderr);
+        assert(0);
     }
+    // }
     int num_indexes = 1;
     sds indexes_to_create[2] = {config.search.name, NULL};
     sds algorithms[2] = {config.search.algorithm, NULL};
@@ -3337,8 +3338,12 @@ static void freeClusterNodes(void) {
     config.cluster_primary_nodes = NULL;
 }
 
-static clusterNode **addClusterNode(clusterNode *node, int selected) {
-    printf("Adding cluster node %s %s:%d\n", node->name, node->ip, node->port);    
+static clusterNode **addClusterNode(clusterNode *node, int is_primary) {
+    int selected =  isSelected(is_primary);
+    node->is_replica = !is_primary;
+    node->selected = selected;
+    printf("Adding cluster node (%s) %s %s:%d\n", (selected? "selected": "not selected"), node->name, node->ip, node->port);
+
     // verify node ip + port is unique
     for (int i = 0; i < config.cluster_node_count; i++) {
         clusterNode *n = config.cluster_nodes[i];
@@ -3377,16 +3382,21 @@ int isElastiCacheEndpoint(const char *hostname) {
 static int fetchCMDNodesConfiguration(void);
 static int setupElastiCacheCMDNodes(void);
 static sds constructElastiCacheReaderEndpoint(const char *hostname);
-static int setupOpenSourceCMDPrimary(valkeyReply *role_reply);
-static int setupOpenSourceCMDReplica(valkeyReply *role_reply);
+static int setupOpenSourceCMDPrimary(valkeyReply *info_reply);
+static int setupOpenSourceCMDReplica(valkeyReply *info_reply);
 // static serverConfig *getServerConfigSafe(enum valkeyConnectionType ct, const char *host, int port);
 
 /**
  * Fetch nodes configuration for Cluster Mode Disabled (CMD) setup.
- * Handles open-source Valkey (via ROLE) and AWS ElastiCache (reader endpoint synthesis).
+ * Uses INFO REPLICATION to discover primary and replica topology.
  * 
- * For ElastiCache CMD: creates primary + single reader endpoint node (load-balanced across replicas).
- * For open-source: creates primary + individual replica nodes from ROLE output.
+ * INFO REPLICATION format:
+ * role:master
+ * connected_slaves:1
+ * slave0:ip=10.21.0.202,port=6379,state=online,offset=121817956112,lag=0,type=replica
+ * 
+ * For ElastiCache CMD: creates primary + reader endpoint (synthesized from hostname).
+ * For open-source: creates primary + individual replica nodes from INFO REPLICATION.
  * 
  * Returns 1 on success, 0 on failure.
  */
@@ -3394,7 +3404,7 @@ static int fetchCMDNodesConfiguration(void) {
     int success = 1;
     valkeyContext *ctx = NULL;
     valkeyReply *reply = NULL;
-    assert(!isElastiCacheEndpoint(config.conn_info.hostip));
+    
     ctx = config.conn_ctx;
     if (ctx == NULL) {
         fprintf(stderr, "No existing connection context, creating new\n");
@@ -3407,21 +3417,36 @@ static int fetchCMDNodesConfiguration(void) {
         }
     }
 
-    /* Detect ElastiCache by trying ROLE first */
-    reply = valkeyCommand(ctx, "ROLE");
-    if (reply == NULL || ctx->err || reply->type != VALKEY_REPLY_ARRAY || reply->elements < 1) {        
+    /* Get replication info */
+    reply = valkeyCommand(ctx, "INFO REPLICATION");
+    if (reply == NULL || ctx->err || 
+        (reply->type != VALKEY_REPLY_STRING && reply->type != VALKEY_REPLY_STATUS)) {
+        fprintf(stderr, "ERROR: INFO REPLICATION failed: %s\n", 
+                ctx->err ? ctx->errstr : "unexpected response type");
         success = 0;
-        /* ROLE failed - try ElastiCache reader endpoint synthesis */
-        printf("ROLE command failed, assuming ElastiCache endpoint and trying reader endpoint synthesis\n");
         goto cleanup;
     }
-    printf("Detected open-source Valkey endpoint, using ROLE output for replicas\n");    
-    char *role = reply->element[0]->str;
+    
+    /* Parse INFO REPLICATION output */
+    char *info = reply->str;
+    char *role_line = strstr(info, "role:");
+    if (!role_line) {
+        fprintf(stderr, "ERROR: Could not find 'role:' in INFO REPLICATION output\n");
+        success = 0;
+        goto cleanup;
+    }
+    
+    char role[32];
+    sscanf(role_line, "role:%31s", role);
+    
     if (strcmp(role, "master") == 0) {
+        printf("Detected primary node, using INFO REPLICATION for replica discovery\n");
         success = setupOpenSourceCMDPrimary(reply);
     } else if (strcmp(role, "slave") == 0) {
+        printf("Detected replica node, connecting to primary\n");
         success = setupOpenSourceCMDReplica(reply);
     } else {
+        fprintf(stderr, "ERROR: Unknown role '%s' in INFO REPLICATION\n", role);
         success = 0;
     }
 
@@ -3452,7 +3477,7 @@ static int setupElastiCacheCMDNodes(void) {
         primary->slots[primary->slots_count++] = slot;
     }
 
-    if (!addClusterNode(primary, isSelected(1))) {
+    if (!addClusterNode(primary, 1)) {
         freeClusterNode(primary);
         return 0;
     }
@@ -3498,7 +3523,7 @@ static int setupElastiCacheCMDNodes(void) {
         reader->slots[reader->slots_count++] = slot;
     }
 
-    if (!addClusterNode(reader, isSelected(0))) {
+    if (!addClusterNode(reader, 0)) {
         freeClusterNode(reader);
         return 0;
     }
@@ -3544,9 +3569,12 @@ static sds constructElastiCacheReaderEndpoint(const char *hostname) {
 }
 /**
  * Setup nodes for open-source Valkey CMD when connected to primary.
- * Parses ROLE response to enumerate individual replica endpoints.
+ * Parses INFO REPLICATION response to enumerate individual replica endpoints.
+ * 
+ * INFO REPLICATION format:
+ * slave0:ip=10.21.0.202,port=6379,state=online,offset=121817956112,lag=0,type=replica
  */
-static int setupOpenSourceCMDPrimary(valkeyReply *role_reply) {
+static int setupOpenSourceCMDPrimary(valkeyReply *info_reply) {
     /* Add primary node */
     clusterNode *primary = createClusterNode((char *)config.conn_info.hostip, 
                                               config.conn_info.hostport);
@@ -3557,56 +3585,118 @@ static int setupOpenSourceCMDPrimary(valkeyReply *role_reply) {
         primary->slots[primary->slots_count++] = slot;
     }
     
-    if (!addClusterNode(primary, isSelected(1))) {
+    if (!addClusterNode(primary, 1)) {
         freeClusterNode(primary);
         return 0;
     }
     
-    /* Parse replicas from ROLE response: [role, repl_offset, [[ip, port, offset], ...]] */
-    if (role_reply->elements >= 3 && role_reply->element[2]->type == VALKEY_REPLY_ARRAY) {
-        size_t replica_count = role_reply->element[2]->elements;
+    /* Parse replicas from INFO REPLICATION: slave0:ip=X,port=Y,... */
+    char *info = info_reply->str;
+    char *line = info;
+    int replica_idx = 0;
+    
+    while (line) {
+        /* Look for slave lines: "slave0:ip=..." */
+        char *slave_line = strstr(line, "slave");
+        if (!slave_line) break;
         
-        for (size_t i = 0; i < replica_count; i++) {
-            valkeyReply *replica_info = role_reply->element[2]->element[i];
-            if (replica_info->type != VALKEY_REPLY_ARRAY || replica_info->elements < 2) {
-                continue;
+        /* Parse: slaveN:ip=X,port=Y,state=Z,... */
+        char ip[256];
+        int port = 0;
+        char state[32];
+        
+        char *ip_start = strstr(slave_line, "ip=");
+        char *port_start = strstr(slave_line, "port=");
+        char *state_start = strstr(slave_line, "state=");
+        
+        if (ip_start && port_start) {
+            ip_start += 3;  /* Skip "ip=" */
+            char *ip_end = strchr(ip_start, ',');
+            if (ip_end) {
+                size_t ip_len = ip_end - ip_start;
+                if (ip_len < sizeof(ip)) {
+                    memcpy(ip, ip_start, ip_len);
+                    ip[ip_len] = '\0';
+                    
+                    port_start += 5;  /* Skip "port=" */
+                    port = atoi(port_start);
+                    
+                    /* Check if replica is online */
+                    int is_online = 1;
+                    if (state_start) {
+                        state_start += 6;  /* Skip "state=" */
+                        char *state_end = strchr(state_start, ',');
+                        if (state_end) {
+                            size_t state_len = state_end - state_start;
+                            if (state_len < sizeof(state)) {
+                                memcpy(state, state_start, state_len);
+                                state[state_len] = '\0';
+                                is_online = (strcmp(state, "online") == 0);
+                            }
+                        }
+                    }
+                    
+                    if (is_online && port > 0) {
+                        clusterNode *replica = createClusterNode(sdsnew(ip), port);
+                        if (!replica) return 0;
+                        
+                        replica->name = sdscatprintf(sdsempty(), "replica-%d", replica_idx);
+                        replica->flags = 1;
+                        replica->replicate = sdsnew(primary->name);
+                        
+                        for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
+                            replica->slots[replica->slots_count++] = slot;
+                        }
+                        
+                        printf("Found replica %d: %s:%d (state=%s)\n", replica_idx, ip, port, state);
+                        
+                        if (!addClusterNode(replica, 0)) {
+                            freeClusterNode(replica);
+                            return 0;
+                        }
+                        
+                        primary->replicas_count++;
+                        replica_idx++;
+                    }
+                }
             }
-            
-            char *replica_ip = replica_info->element[0]->str;
-            int replica_port = (int)replica_info->element[1]->integer;
-            
-            clusterNode *replica = createClusterNode(sdsnew(replica_ip), replica_port);
-            if (!replica) return 0;
-            
-            replica->name = sdscatprintf(sdsempty(), "replica-%zu", i);
-            replica->flags = 1;
-            replica->replicate = sdsnew(primary->name);
-            
-            for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
-                replica->slots[replica->slots_count++] = slot;
-            }
-            
-            if (!addClusterNode(replica, isSelected(0))) {
-                freeClusterNode(replica);
-                return 0;
-            }
-            
-            primary->replicas_count++;
         }
+        
+        /* Move to next line */
+        line = strchr(slave_line, '\n');
+        if (line) line++;
     }
     
+    printf("Primary configured with %d replicas\n", primary->replicas_count);
     return 1;
 }
 
 /**
  * Setup nodes for open-source Valkey CMD when connected to replica.
- * Parses ROLE response to find primary, then adds current replica.
+ * Parses INFO REPLICATION to find primary, then adds current replica.
+ * 
+ * INFO REPLICATION format when connected to replica:
+ * role:slave
+ * master_host:172.31.36.220
+ * master_port:6379
  */
-static int setupOpenSourceCMDReplica(valkeyReply *role_reply) {
-    if (role_reply->elements < 3) return 0;
+static int setupOpenSourceCMDReplica(valkeyReply *info_reply) {
+    char *info = info_reply->str;
     
-    char *primary_ip = role_reply->element[1]->str;
-    int primary_port = (int)role_reply->element[2]->integer;
+    /* Parse master host and port */
+    char *master_host_line = strstr(info, "master_host:");
+    char *master_port_line = strstr(info, "master_port:");
+    
+    if (!master_host_line || !master_port_line) {
+        fprintf(stderr, "ERROR: Could not find master_host or master_port in INFO REPLICATION\n");
+        return 0;
+    }
+    
+    char primary_ip[256];
+    int primary_port;
+    
+    sscanf(master_host_line, "master_host:%255s", primary_ip);
+    sscanf(master_port_line, "master_port:%d", &primary_port);
     
     /* Add primary node */
     clusterNode *primary = createClusterNode(sdsnew(primary_ip), primary_port);
@@ -3616,11 +3706,12 @@ static int setupOpenSourceCMDReplica(valkeyReply *role_reply) {
     for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
         primary->slots[primary->slots_count++] = slot;
     }
-
-    if (!addClusterNode(primary, isSelected(1))) {
+    if (!addClusterNode(primary, 1)) {
         freeClusterNode(primary);
         return 0;
     }
+    
+    printf("Found primary: %s:%d\n", primary_ip, primary_port);
     
     /* Add current replica node */
     clusterNode *replica = createClusterNode((char *)config.conn_info.hostip,
@@ -3634,25 +3725,33 @@ static int setupOpenSourceCMDReplica(valkeyReply *role_reply) {
     for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
         replica->slots[replica->slots_count++] = slot;
     }
-    
-    if (!addClusterNode(replica, isSelected(0))) {
+    if (!addClusterNode(replica, 0)) {
         freeClusterNode(replica);
         return 0;
     }
     
     primary->replicas_count = 1;
+    printf("Configured replica node: %s:%d\n", config.conn_info.hostip, config.conn_info.hostport);
     return 1;
 }
 
-/* Fetch the cluster configuration by calling CLUSTER SLOTS and update
- * the internal representation of the cluster nodes accordingly. */
+/* Fetch the cluster configuration by calling CLUSTER NODES and update
+ * the internal representation of the cluster nodes accordingly. 
+ * 
+ * CLUSTER NODES format:
+ * <id> <ip:port@cport> <flags> <master> <ping-sent> <pong-recv> <config-epoch> <link-state> <slot> <slot> ... <slot>
+ * 
+ * Examples:
+ * - Master: f5f9bdad... 172.31.36.220:6379@1122 myself,master - 0 0 1 connected 0-16383
+ * - Replica: ebdd1dc9... 172.31.20.20:6379@1122 slave f5f9bdad... 0 1761043963894 1 connected
+ */
 static int fetchClusterConfiguration(void) {
     int success = 1;
     valkeyContext *ctx = NULL;
     valkeyReply *reply = NULL;
     dict *nodes = NULL;
     const char *errmsg = "Failed to fetch cluster configuration";
-    size_t i, j;
+    
     ctx = config.conn_ctx;
     if (ctx == NULL) {
         fprintf(stderr, "No existing connection context, creating new\n");
@@ -3662,79 +3761,163 @@ static int fetchClusterConfiguration(void) {
         }
     }
 
-    reply = valkeyCommand(ctx, "CLUSTER SLOTS");
+    /* Try CLUSTER NODES first - gives us topology with explicit master/slave roles */
+    reply = valkeyCommand(ctx, "CLUSTER NODES");
     if (reply == NULL || reply->type == VALKEY_REPLY_ERROR) {
         success = 0;
-        if (reply) fprintf(stderr, "%s\nCLUSTER SLOTS ERROR: %s\n", errmsg, reply->str);
+        if (reply) fprintf(stderr, "%s\nCLUSTER NODES ERROR: %s\n", errmsg, reply->str);
         goto cleanup;
     }
-    assert(reply->type == VALKEY_REPLY_ARRAY);
+    
+    if (reply->type != VALKEY_REPLY_STRING && reply->type != VALKEY_REPLY_STATUS) {
+        fprintf(stderr, "%s\nUnexpected CLUSTER NODES response type: %d\n", errmsg, reply->type);
+        success = 0;
+        goto cleanup;
+    }
+    
     nodes = dictCreate(&dtype);
-    for (i = 0; i < reply->elements; i++) {
-        valkeyReply *r = reply->element[i];
-        assert(r->type == VALKEY_REPLY_ARRAY);
-        assert(r->elements >= 3);
-        int from = r->element[0]->integer;
-        int to = r->element[1]->integer;
-        sds primary = NULL;
-        for (j = 2; j < r->elements; j++) {
-            valkeyReply *nr = r->element[j];
-            assert(nr->type == VALKEY_REPLY_ARRAY && nr->elements >= 3);
-            assert(nr->element[0]->str != NULL);
-            assert(nr->element[2]->str != NULL);
-
-            int is_primary = (j == 2);
-            if (is_primary) primary = sdsnew(nr->element[2]->str);
-            // printf("Node %s:%lld is %s\n", nr->element[0]->str, nr->element[1]->integer, is_primary ? "primary" : "replica");
-
-            sds ip = sdsnew(nr->element[0]->str);
-            sds name = sdsnew(nr->element[2]->str);
-            printf("Node %s:%lld is %s name %s\n", nr->element[0]->str, nr->element[1]->integer, is_primary ? "primary" : "replica", name);
-            if (sdscmp(ip, "") == 0) {
+    
+    /* Parse CLUSTER NODES line by line */
+    char *line, *saveptr;
+    char *nodes_str = sdsnew(reply->str);
+    line = strtok_r(nodes_str, "\n", &saveptr);
+    
+    while (line != NULL) {
+        /* Parse: <id> <ip:port@cport> <flags> <master-id> <ping> <pong> <epoch> <state> <slots...> */
+        char node_id[128], addr[256], flags[256], master_id[128];
+        int ping_sent, pong_recv, config_epoch;
+        char link_state[32];
+        
+        int parsed = sscanf(line, "%127s %255s %255s %127s %d %d %d %31s",
+                           node_id, addr, flags, master_id, 
+                           &ping_sent, &pong_recv, &config_epoch, link_state);
+        
+        if (parsed < 8) {
+            printf("Skipping malformed CLUSTER NODES line: %s\n", line);
+            line = strtok_r(NULL, "\n", &saveptr);
+            continue;
+        }
+        
+        /* Extract IP and port from ip:port@cport format */
+        char *at_sign = strchr(addr, '@');
+        if (at_sign) *at_sign = '\0';  /* Remove @cport */
+        
+        char *colon = strchr(addr, ':');
+        if (!colon) {
+            printf("Invalid address format in CLUSTER NODES: %s\n", addr);
+            line = strtok_r(NULL, "\n", &saveptr);
+            continue;
+        }
+        
+        *colon = '\0';
+        char *ip_str = addr;
+        int port = atoi(colon + 1);
+        
+        /* Determine if this is a master or replica from flags */
+        int is_master = (strstr(flags, "master") != NULL);
+        int is_slave = (strstr(flags, "slave") != NULL);
+        
+        if (!is_master && !is_slave) {
+            printf("Skipping node with neither master nor slave flag: %s\n", node_id);
+            line = strtok_r(NULL, "\n", &saveptr);
+            continue;
+        }
+        
+        /* Check if node already exists */
+        sds name = sdsnew(node_id);
+        dictEntry *entry = dictFind(nodes, name);
+        clusterNode *node = NULL;
+        
+        if (entry == NULL) {
+            /* Create new node */
+            sds ip = sdsnew(ip_str);
+            /* Handle empty IP (means use the connection IP) */
+            if (strlen(ip_str) == 0 || strcmp(ip_str, "") == 0) {
+                sdsfree(ip);
                 ip = sdsnew(config.conn_info.hostip);
             }
-            int port = nr->element[1]->integer;
-            int slot_start = from;
-            int slot_end = to;
-            int existed = 0;
-            clusterNode *node = NULL;
-            dictEntry *entry = dictFind(nodes, name);
-            if (entry == NULL) {
-                node = createClusterNode(sdsnew(ip), port);
-                if (node == NULL) {
-                    success = 0;
-                    goto cleanup;
+            
+            node = createClusterNode(ip, port);
+            if (node == NULL) {
+                sdsfree(name);
+                success = 0;
+                goto cleanup;
+            }
+            
+            node->name = name;
+            
+            /* Set replica relationship */
+            if (is_slave && strcmp(master_id, "-") != 0) {
+                node->replicate = sdsnew(master_id);
+            }
+            
+            /* Parse slot ranges from remaining tokens - need to find them after the 8th field */
+            char *slots_start = line;
+            int field_count = 0;
+            /* Skip to the 9th field (after link_state) */
+            while (*slots_start && field_count < 8) {
+                if (*slots_start == ' ') {
+                    field_count++;
+                    while (*slots_start == ' ') slots_start++;  /* Skip multiple spaces */
                 } else {
-                    node->name = name;
-                    if (!is_primary) node->replicate = sdsdup(primary);
-                }
-            } else {
-                existed = 1;
-                node = dictGetVal(entry);
-                printf("Node %s already exists, updating slots/replicas %s %s:%d\n", name, node->name, node->ip, node->port);
-            }
-            if (slot_start == slot_end) {
-                node->slots[node->slots_count++] = slot_start;
-            } else {
-                while (slot_start <= slot_end) {
-                    int slot = slot_start++;
-                    node->slots[node->slots_count++] = slot;
+                    slots_start++;
                 }
             }
-            if (node->slots_count == 0) {
-                fprintf(stderr, "WARNING: Node %s:%d has no slots, skipping... %s\n", node->ip, node->port, existed ? " (already existed)" : "");
-                continue;
-            }
-            if (entry == NULL) {
-                dictReplace(nodes, node->name, node);
-                if (!addClusterNode(node, isSelected(is_primary))) {
-                    success = 0;
-                    goto cleanup;
+            
+            /* Now parse slot ranges from slots_start */
+            if (*slots_start && is_master) {
+                char *slots_str = sdsnew(slots_start);
+                char *slot_token, *slot_saveptr;
+                slot_token = strtok_r(slots_str, " ", &slot_saveptr);
+                
+                while (slot_token != NULL) {
+                    /* Slot can be: "0-5460" or "5461" or "[0->-node_id]" (migrating) */
+                    if (slot_token[0] == '[') {
+                        /* Skip migrating/importing slots */
+                        slot_token = strtok_r(NULL, " ", &slot_saveptr);
+                        continue;
+                    }
+                    
+                    char *dash = strchr(slot_token, '-');
+                    if (dash) {
+                        /* Slot range: start-end */
+                        int slot_start = atoi(slot_token);
+                        int slot_end = atoi(dash + 1);
+                        for (int slot = slot_start; slot <= slot_end; slot++) {
+                            node->slots[node->slots_count++] = slot;
+                        }
+                    } else {
+                        /* Single slot */
+                        int slot = atoi(slot_token);
+                        node->slots[node->slots_count++] = slot;
+                    }
+                    
+                    slot_token = strtok_r(NULL, " ", &slot_saveptr);
                 }
+                
+                sdsfree(slots_str);
             }
+            
+            dictReplace(nodes, node->name, node);
+            
+            printf("Node %s (%s:%d) is %s, slots=%d\n", 
+                   node_id, ip_str, port, 
+                   is_master ? "master" : "slave", 
+                   node->slots_count);
+
+            if (!addClusterNode(node, is_master)) {
+                success = 0;
+                goto cleanup;
+            }
+        } else {
+            sdsfree(name);
         }
-        sdsfree(primary);
+        
+        line = strtok_r(NULL, "\n", &saveptr);
     }
+    
+    sdsfree(nodes_str);
+    
 cleanup:
     if (!success) {
         if (config.cluster_nodes) freeClusterNodes();
@@ -4125,9 +4308,7 @@ int parseOptions(int argc, char **argv) {
                 fprintf(stderr, "WARNING: Too many threads, limiting threads to %d.\n", MAX_THREADS);
                 config.num_threads = MAX_THREADS;
             } else if (config.num_threads < 0)
-                config.num_threads = 0;
-        } else if (!strcmp(argv[i], "--cluster")) {
-            config.cluster_mode = 1;
+                config.num_threads = 0;        
         } else if (!strcmp(argv[i], "--rfr")) {
             if (argv[++i]) {
                 if (!strcmp(argv[i], "all")) {
@@ -4693,7 +4874,7 @@ int main(int argc, char **argv) {
     char *data, *cmd, *tag;
     int len;
     memset(&config, 0, sizeof(config));
-    config.is_cluster_mode_enabled = -1; /* Unknown until detected */
+    config.cluster_mode = -1; /* Unknown until detected */
     client c;
 
     /* Configure libvalkey to use jemalloc allocators.
@@ -4747,7 +4928,7 @@ int main(int argc, char **argv) {
     config.threads = NULL;
     config.cluster_mode = 0;
     config.rps = 0;
-    config.read_from_replica = FROM_ALL;
+    config.read_from_replica = FROM_PRIMARY_ONLY;
     config.cluster_node_count = 0;
     config.cluster_nodes = NULL;
     config.server_config = NULL;
@@ -4922,12 +5103,11 @@ int main(int argc, char **argv) {
     config.engine_type = getEngineType(config.conn_info.hostip, config.conn_info.hostport, config.ct);
     valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
     /* Detect cluster mode (CME vs CMD) */
-    config.is_cluster_mode_enabled = isClusterModeEnabled(ctx) > 0; /* Unknown by default */
+    config.cluster_mode = isClusterModeEnabled(ctx) > 0; /* Unknown by default */
     valkeyFree(ctx);
     if (config.cluster_mode) {
         // We only include the slot placeholder {tag} if cluster mode is enabled
         tag = "{tag}";
-
         /* Fetch cluster configuration. */
         if (!fetchClusterConfiguration() || !config.cluster_nodes) {
             if (config.ct != VALKEY_CONN_UNIX) {
@@ -5197,9 +5377,9 @@ int main(int argc, char **argv) {
         
         /* Print cluster mode information */
         const char *cluster_mode_str = "Unknown";
-        if (config.is_cluster_mode_enabled == 1) {
+        if (config.cluster_mode == 1) {
             cluster_mode_str = "CME (Cluster Mode Enabled)";
-        } else if (config.is_cluster_mode_enabled == 0) {
+        } else if (config.cluster_mode == 0) {
             cluster_mode_str = "CMD (Cluster Mode Disabled)";
         }
         
@@ -5228,7 +5408,7 @@ int main(int argc, char **argv) {
             /* Build vector ID mappings by scanning cluster for pre-existing vectors */
             /* Note: New vectors inserted during benchmark will update the mapping in real-time */
             printf("Building vector ID to cluster tag mappings from existing cluster data...\n");
-            int scan_result = buildVectorIdMappings(config.is_cluster_mode_enabled,
+            int scan_result = buildVectorIdMappings(config.cluster_mode,
                                                 config.search.prefix,
                                                 config.selected_nodes,
                                                 config.selected_node_count,

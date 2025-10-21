@@ -1300,8 +1300,6 @@ int getNodeProgressMemoryDB(clusterNode *node, enum valkeyConnectionType ct, con
     // send command to node
     valkeyReply *reply = valkeyCommand(ctx, "FT.INFO %b", index_name, strlen(index_name));
     assert(reply);
-    // printf("MemoryDB: FT.INFO response from node %s:\n", node->name);
-    // fflush(stdout);
     // sleep(1); // give some time for the user to read the message
     sds info_lines = convertMemDBFtInfoToLines(reply, NULL);
     freeReplyObject(reply);
@@ -1312,14 +1310,16 @@ int getNodeProgressMemoryDB(clusterNode *node, enum valkeyConnectionType ct, con
     sds search_info_lines = convertMemDBFtInfoToLines(search_info_reply, NULL);
     assert(search_info_lines);
     freeReplyObject(search_info_reply);
-    // printf("MemoryDB: converted FT.INFO response from node %s to lines:\n%s\n", node->name, info_lines);
-    // fflush(stdout);
-    // sleep(1); // give some time for the user to read the message
     if (strlen(info_lines) == 0) {
+        if (info_lines) sdsfree(info_lines);
+        // if node is replica, it might be lagging, so just return in progress.
+        if (node->is_replica) {
+            *progress_percent = 0;
+            return 1;
+        }
         fprintf(stderr, "Error: Empty FT.INFO response from node %s.\n", node->name);
         fflush(stderr);
-        sdsfree(info_lines);
-        assert(0);
+        assert(0);        
     }
     if (strstr(info_lines, "index_degradation_percentage:") == NULL) {
         fprintf(stderr, "Error: FT.INFO response from node %s does not contain expected fields. GOT:\n%s\n", node->name, info_lines);

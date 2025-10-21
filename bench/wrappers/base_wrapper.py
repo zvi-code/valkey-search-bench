@@ -181,13 +181,15 @@ class ValKeyBenchmarkWrapper:
     def __init__(self, 
                  binary: Optional[str] = None,
                  cli: Optional[str] = None,
-                 verbose: bool = False):
+                 verbose: bool = False,
+                 display_output: bool = False):
         """Initialize the wrapper.
         
         Args:
             binary: Path to valkey-benchmark binary (auto-detected if None)
             cli: Path to valkey-cli binary (auto-detected if None)
             verbose: Enable verbose output
+            display_output: Display benchmark output in real-time (default: False)
         
         Raises:
             BinaryNotFoundError: If binaries cannot be found
@@ -195,6 +197,7 @@ class ValKeyBenchmarkWrapper:
         self.binary = binary or self._find_binary()
         self.cli = cli or self._find_cli()
         self.verbose = verbose
+        self.display_output = display_output
         
         if self.verbose:
             print(f"Using binary: {self.binary}")
@@ -385,25 +388,62 @@ class ValKeyBenchmarkWrapper:
         
         # Execute benchmark
         try:
-            result = subprocess.run(
-                args,
-                capture_output=True,
-                text=True,
-                timeout=3600  # 1 hour timeout
-            )
+            if self.display_output:
+                # Stream output to terminal while capturing it
+                process = subprocess.Popen(
+                    args,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1  # Line buffered
+                )
+                
+                output_lines = []
+                stderr_lines = []
+                
+                # Read stdout line by line and display
+                for line in process.stdout:
+                    print(line, end='', flush=True)
+                    output_lines.append(line)
+                
+                # Wait for process to complete and get stderr
+                _, stderr = process.communicate()
+                if stderr:
+                    stderr_lines.append(stderr)
+                
+                # Check return code
+                if process.returncode != 0:
+                    raise BenchmarkError(
+                        f"Benchmark failed with return code {process.returncode}\n"
+                        f"stderr: {stderr}"
+                    )
+                
+                # Reconstruct full output
+                output = ''.join(output_lines)
+            else:
+                # Original behavior: capture all output silently
+                result = subprocess.run(
+                    args,
+                    capture_output=True,
+                    text=True,
+                    timeout=3600  # 1 hour timeout
+                )
+                
+                if result.returncode != 0:
+                    raise BenchmarkError(
+                        f"Benchmark failed with return code {result.returncode}\n"
+                        f"stderr: {result.stderr}"
+                    )
+                
+                output = result.stdout
+                
         except subprocess.TimeoutExpired:
             raise BenchmarkError("Benchmark timed out after 1 hour")
         except Exception as e:
             raise BenchmarkError(f"Failed to run benchmark: {e}")
         
-        if result.returncode != 0:
-            raise BenchmarkError(
-                f"Benchmark failed with return code {result.returncode}\n"
-                f"stderr: {result.stderr}"
-            )
-        
         # Parse output
-        return self._parse_output(result.stdout, config)
+        return self._parse_output(output, config)
     
     def _parse_output(self, output: str, config: BenchmarkConfig) -> BenchmarkResult:
         """Parse benchmark console output.
@@ -470,6 +510,12 @@ class ValKeyBenchmarkWrapper:
             recall_min = None
             recall_max = None
             
+            # Try optimizer output format first: "Recall Avg: 0.9847"
+            recall_avg_match = re.search(r'Recall Avg:\s+([\d.]+)', output)
+            if recall_avg_match:
+                recall_avg = float(recall_avg_match.group(1))
+            
+            # Try standard recall statistics format
             recall_section = re.search(
                 r'====== DATASET RECALL STATISTICS ======.*?Recall@\d+:(.*?)(?:\n\n|\Z)',
                 output,

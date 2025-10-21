@@ -191,24 +191,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Simplest usage - maximize QPS with 95%% recall
+  # Simplest usage - find max QPS with 95%% recall
   %(prog)s --host localhost --dataset openai-large-5m
   
-  # Tighter recall requirement
+  # Custom recall requirement
   %(prog)s --host localhost --dataset sift-128 --target-recall 0.98
-  
-  # Custom latency constraint
-  %(prog)s --host localhost --dataset cohere-large-10m --max-p99-latency 100
-  
-  # Minimize latency instead of maximizing QPS
-  %(prog)s --host localhost --dataset glove-50 --objective minimize:p99_latency
 
 The script uses valkey-benchmark's native optimizer to:
   - Automatically detect dataset properties
-  - Run closed-loop search for optimal parameters
-  - Find best ef_search, num_clients, and num_threads
-  - Satisfy recall and latency constraints
-  - Report exact command for reproducibility
+  - Find maximum QPS while maintaining target recall
+  - Optimize ef_search, num_clients, and num_threads
+  - Report performance metrics and exact command for reproducibility
         """
     )
     
@@ -233,11 +226,6 @@ The script uses valkey-benchmark's native optimizer to:
         help="Minimum target recall threshold (default: 0.95)"
     )
     parser.add_argument(
-        "--max-p99-latency",
-        type=float,
-        help="Maximum acceptable P99 latency in ms (default: auto based on dimensions)"
-    )
-    parser.add_argument(
         "--num-requests",
         type=int,
         default=10000,
@@ -246,21 +234,26 @@ The script uses valkey-benchmark's native optimizer to:
     parser.add_argument(
         "--max-iterations",
         type=int,
-        default=50,
-        help="Maximum optimizer iterations (default: 50)"
-    )
-    parser.add_argument(
-        "--objective",
-        default="maximize:qps",
-        help="Optimization objective (default: maximize:qps). "
-             "Format: 'maximize:metric' or 'minimize:metric'. "
-             "Metrics: qps, avg_latency, p99_latency, recall_avg, etc."
+        default=20,
+        help="Maximum optimizer iterations (default: 20)"
     )
     
     # Output
     parser.add_argument(
         "--output",
         help="Save optimization results to CSV file"
+    )
+    parser.add_argument(
+        "--show-output",
+        action="store_true",
+        default=True,
+        help="Display benchmark output in real-time (default: True)"
+    )
+    parser.add_argument(
+        "--no-show-output",
+        dest="show_output",
+        action="store_false",
+        help="Suppress benchmark output (only show final results)"
     )
     parser.add_argument(
         "--verbose",
@@ -285,7 +278,10 @@ The script uses valkey-benchmark's native optimizer to:
     
     # Initialize wrapper
     try:
-        wrapper = ValKeyBenchmarkWrapper(verbose=args.verbose)
+        wrapper = ValKeyBenchmarkWrapper(
+            verbose=args.verbose,
+            display_output=args.show_output
+        )
     except BinaryNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -344,22 +340,9 @@ The script uses valkey-benchmark's native optimizer to:
     print(f"   Initial clients:   {num_clients}")
     print(f"   Threads:           {num_threads}")
     
-    # Auto-determine latency threshold if not specified
-    if args.max_p99_latency is None:
-        if dimensions <= 128:
-            max_p99_latency = 50.0  # Small dims
-        elif dimensions <= 512:
-            max_p99_latency = 100.0  # Medium dims
-        else:
-            max_p99_latency = 200.0  # Large dims - more lenient for network + computation
-    else:
-        max_p99_latency = args.max_p99_latency
-    
-    print(f"\n🎯 Optimization goals:")
-    print(f"   Objective:         {args.objective}")
-    print(f"   Min recall:        {args.target_recall:.0%}")
-    print(f"   Max P99 latency:   {max_p99_latency:.1f}ms")
-    print(f"   Max iterations:    {args.max_iterations}")
+    print(f"\n🎯 Optimization goal:")
+    print(f"   Maximize QPS with recall >= {args.target_recall:.0%}")
+    print(f"   Max iterations: {args.max_iterations}")
     
     # Step 3: Run optimizer using native valkey-benchmark --optimize
     print(f"\n🔍 Running optimizer (closed-loop search)...\n")
@@ -380,9 +363,8 @@ The script uses valkey-benchmark's native optimizer to:
             "--search-prefix", search_prefix,  # Prefix for keys: zvec_{name}:
             "--vector-dim", str(dimensions),  # Vector dimensions
             "--optimize",
-            "--optimize-objective", args.objective,
+            "--optimize-objective", "maximize:qps",
             "--optimize-constraint", f"recall_avg:gt:{args.target_recall}",
-            "--optimize-constraint", f"p99_latency:lt:{max_p99_latency}",
             "--optimize-max-iterations", str(args.max_iterations),
             "--optimize-min-requests", str(args.num_requests),
         ]
@@ -426,8 +408,10 @@ The script uses valkey-benchmark's native optimizer to:
         if best_result.recall_avg is not None:
             print(f"\nRecall:")
             print(f"  Average:     {best_result.recall_avg:.2%}")
-            print(f"  Min:         {best_result.recall_min:.2%}")
-            print(f"  Max:         {best_result.recall_max:.2%}")
+            if best_result.recall_min is not None:
+                print(f"  Min:         {best_result.recall_min:.2%}")
+            if best_result.recall_max is not None:
+                print(f"  Max:         {best_result.recall_max:.2%}")
         
         if best_result.baseline_latency_avg is not None:
             overhead = best_result.latency_avg - best_result.baseline_latency_avg
@@ -464,12 +448,9 @@ The script uses valkey-benchmark's native optimizer to:
     else:
         print("❌ OPTIMIZATION FAILED")
         print(f"{'='*70}\n")
-        print(f"Could not achieve constraints:")
-        print(f"  - Recall >= {args.target_recall:.0%}")
-        print(f"  - P99 latency <= {max_p99_latency:.1f}ms\n")
+        print(f"Could not find configuration with recall >= {args.target_recall:.0%}\n")
         print("Suggestions:")
         print(f"  - Lower --target-recall (try 0.90 or 0.85)")
-        print(f"  - Increase --max-p99-latency (current: {max_p99_latency:.1f}ms)")
         print(f"  - Increase --max-iterations (current: {args.max_iterations})")
         print(f"  - Check that index '{index_name}' exists and is configured correctly")
         print(f"{'='*70}\n")

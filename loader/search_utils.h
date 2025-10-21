@@ -31,6 +31,8 @@ struct serverConfig;
 /* Cluster node - shared between valkey-benchmark.c and search_utils.c */
 typedef struct clusterNode {
     valkeyContext *ctx;
+    int selected; /* Whether this node is selected for benchmarking */
+    int is_replica; /* Whether this node is a replica */
     char *ip;
     int port;
     sds name;
