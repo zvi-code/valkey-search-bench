@@ -78,6 +78,38 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Description:** Add support for search data in JSON data type (HASH is the default).
 **Benefits:** Improved usability and integration with external tools.
 
+## 19. Allow Range based address specification
+**Status:** Planned  
+**Description:** Allow specifying a range of addresses not starting from 0.  
+**Benefits:** More flexible data addressing schemes.
+
+### 20. Support Multiple Indexes
+**Status:** Planned  
+**Description:** Add support for multiple indexes in a single benchmark run.  
+**Benefits:** Test scenarios involving multiple indexes and their interactions.
+
+### 21. Support nested key addressing
+**Status:** Planned  
+**Description:** Support nested key addressing like fields in hash or json data types. Allow specifying field ranges per key. So you can run random hset load, with varying number of fields in key and length.
+**Benefits:** More realistic testing scenarios with complex data structures.
+
+### 22. Extend support of delete operations
+**Status:** Planned  
+**Description:** Extend delete operations to support deleting by range, by % or by capacity target.  
+**Benefits:** More flexible data management scenarios.
+
+### 23. Support for mixed workloads + hybrid search
+**Status:** Planned  
+**Description:** Add support for mixed workloads involving different operation types (e.g., search, insert, delete) in a single benchmark run. This will also support having non-search operations running in the background while search operations are being benchmarked.
+**Benefits:** More realistic testing scenarios that mimic production workloads.
+
+### 24. Evaluate base latency
+**Status:** Planned  
+**Description:** At the beginning of a benchmark run, evaluate the base latency of the system with PING commands. This will be considered as overhead that is related to the network connectivity between the client and server. We will not subtract this base latency but will allow presenting it alongside the measured latencies for search operations.
+**Benefits:** More accurate latency measurements by accounting for network overhead.
+
+
+---
 ## Wrapper Scripts Enhancements
 
 ### 1. Max QPS at Target Recall

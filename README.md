@@ -175,17 +175,18 @@ python prep_datasets/convert_parquet_to_hdf5.py \
 
 ### Key Capabilities
 
-✅ **Unified dataset manager** - One tool for all download/conversion operations  
-✅ Two-phase benchmarking (ground truth insertion + query testing)  
-✅ **Metadata filtering support** - Tag-based filtered vector search (YFCC-10M)  
-✅ Cluster mode support with read-from-replica options  
-✅ Parallel cluster scanning for recall validation  
-✅ Vector ID to cluster tag mapping for missing neighbor reconstruction  
-✅ **Adaptive load optimizer with multi-phase optimization**  
-✅ **Binary search for recall optimization (ef_search tuning)**  
-✅ **Grid search for throughput optimization (clients/threads tuning)**  
-✅ HDR histogram for accurate latency percentiles  
-✅ Progress bars and real-time monitoring  
+✅ **Unified dataset manager** - One tool for all download/conversion operations
+✅ Two-phase benchmarking (ground truth insertion + query testing)
+✅ **Metadata filtering support** - Tag-based filtered vector search (YFCC-10M)
+✅ **Configuration persistence** - Automatic saving and loading of benchmark parameters
+✅ Cluster mode support with read-from-replica options
+✅ Parallel cluster scanning for recall validation
+✅ Vector ID to cluster tag mapping for missing neighbor reconstruction
+✅ **Adaptive load optimizer with multi-phase optimization**
+✅ **Binary search for recall optimization (ef_search tuning)**
+✅ **Grid search for throughput optimization (clients/threads tuning)**
+✅ HDR histogram for accurate latency percentiles
+✅ Progress bars and real-time monitoring
 ✅ Comprehensive result analysis and CSV export  
 
 ## Metadata Filtering Support
@@ -285,7 +286,105 @@ The optimizer automatically tunes benchmark parameters to achieve your performan
 - Same as objectives
 - Example: `recall_avg:gt:0.95` means "recall must be greater than 0.95"
 
-See [Advanced Guide - Optimizer Internals](docs/ADVANCED.md#optimizer-internals) for algorithm details.  
+See [Advanced Guide - Optimizer Internals](docs/ADVANCED.md#optimizer-internals) for algorithm details.
+
+## Configuration Persistence
+
+The benchmark tool now supports automatic configuration persistence to reduce repetitive command-line arguments and maintain configuration state between runs.
+
+### How It Works
+
+- **Automatic Saving**: Configuration is automatically saved after successful runs
+- **Smart Loading**: Saved configuration is loaded as defaults for subsequent runs
+- **Selective Override**: Command-line arguments override saved values
+- **Transient Exclusion**: Connection-specific options (`-t`, `-h`) are never persisted
+
+### Configuration File Locations
+
+The tool checks for configuration in this order:
+
+1. **Workspace-local**: `./.valkey-benchmark.conf` (current directory)
+2. **User-global**: `~/.valkey-benchmark/config.conf` (home directory)
+
+### Usage Examples
+
+```bash
+# First run - specify all options (gets saved automatically)
+./bin/valkey-benchmark -h localhost --cluster --rfr no \
+  --dataset cohere-medium-1m.bin \
+  -t vec-query --search --vector-dim 768 \
+  --search-name cohere_1m --search-prefix zvec_: \
+  -n 10000 -c 10 --threads 4
+
+# Second run - reuses saved configuration
+./bin/valkey-benchmark -t vec-query
+
+# Override specific parameters while keeping others
+./bin/valkey-benchmark -t vec-query -c 20 --threads 8
+
+# View current saved configuration
+./bin/valkey-benchmark --show-config
+
+# Clear saved configuration
+./bin/valkey-benchmark --clear-config
+
+# Run without saving this configuration
+./bin/valkey-benchmark -t vec-query --dataset test-dataset --no-save-config
+```
+
+### Configuration Management Flags
+
+- `--save-config`: Force save configuration after this run
+- `--no-save-config`: Skip saving configuration for this run
+- `--clear-config`: Delete saved configuration and exit
+- `--show-config`: Display current saved configuration and exit
+
+### Saved Parameters
+
+The following parameters are automatically persisted:
+
+**Basic Parameters:**
+- Number of clients (`-c`)
+- Number of threads (`--threads`)
+- Pipeline size (`-P`)
+- Number of requests (`-n`)
+- Key space length (`-r`)
+- Database number (`--dbnum`)
+- Output format (`--csv`)
+- Loop mode (`-l`)
+- Precision (`--precision`)
+- Cluster mode (`--cluster`)
+- RESP3 mode (`-3`)
+
+**Search Parameters:**
+- Dataset (`--dataset`)
+- Search index name (`--search-name`)
+- Vector algorithm (`--search-alg`)
+- Vector field name (`--vector-field`)
+- Vector dimensions (`--vector-dim`)
+- Tag and numeric fields (`--tag-field`, `--numeric-field`)
+- Search parameters (`--ef-search`, `--ef-construction`, `--m`, `--k`)
+- Distance metric (`--metric`)
+- Search options (`--nocontent`, `--localonly`)
+- Filtered search (`--filtered`)
+
+**Optimizer Parameters:**
+- Optimization mode (`--optimize`)
+- Optimization objective (`--optimize-objective`)
+- Constraints (`--optimize-constraint`)
+- CSV output (`--optimize-csv`)
+- Iteration limits (`--optimize-max-iterations`, `--optimize-min-requests`)
+
+**Authentication & TLS:**
+- Authentication (`-a`, `--user`)
+- TLS certificates and settings
+
+### Benefits
+
+- **Faster Iteration**: No need to retype long command lines
+- **Consistent Testing**: Ensures consistent parameters across benchmark runs
+- **Team Workflows**: Share workspace-local configs via version control
+- **Parameter Memory**: Never lose working configurations
 
 ## Project Structure
 

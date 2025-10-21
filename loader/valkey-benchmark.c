@@ -33,6 +33,7 @@
 #include "dataset_id_mapping.h"
 #include "fmacros.h"
 #include "load_optimizer.h"
+#include "config_persist.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -434,6 +435,10 @@ static struct config {
     sds optimize_csv_file;        /* CSV output file for optimization results */
     int optimize_max_iterations;  /* Max optimization iterations */
     int optimize_min_requests;    /* Min requests per benchmark run */
+
+    /* Config persistence flags */
+    int save_config;              /* Save configuration after successful run */
+    int no_save_config;           /* Skip saving configuration */
 } config;
 
 /* Recall statistics for dataset mode */
@@ -4152,6 +4157,28 @@ int parseOptions(int argc, char **argv) {
             config.num_functions = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--num-keys-in-fcall")) {
             config.num_keys_in_fcall = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--save-config")) {
+            config.save_config = 1;
+        } else if (!strcmp(argv[i], "--no-save-config")) {
+            config.no_save_config = 1;
+        } else if (!strcmp(argv[i], "--clear-config")) {
+            if (config_persist_clear() == 0) {
+                printf("Configuration cleared successfully.\n");
+                exit(0);
+            } else {
+                fprintf(stderr, "Failed to clear configuration.\n");
+                exit(1);
+            }
+        } else if (!strcmp(argv[i], "--show-config")) {
+            persisted_config_t saved_config;
+            memset(&saved_config, 0, sizeof(saved_config));
+            if (config_persist_load(&saved_config) == 0) {
+                config_persist_show(&saved_config, 0);
+                config_persist_free(&saved_config);
+            } else {
+                printf("No saved configuration found.\n");
+            }
+            exit(0);
         } else if (!strcmp(argv[i], "--help")) {
             exit_status = 0;
             goto usage;
@@ -4412,6 +4439,13 @@ usage:
         tls_usage,
         rdma_usage,        
         " --mptcp            Enable an MPTCP connection.\n"
+        "\n"
+        "Configuration Persistence:\n"
+        " --save-config      Save the current configuration after successful run.\n"
+        " --no-save-config   Skip saving configuration for this run.\n"
+        " --clear-config     Clear saved configuration and exit.\n"
+        " --show-config      Display saved configuration and exit.\n"
+        "\n"
         " --help             Output this help and exit.\n"
         " --version          Output version and exit.\n\n"
         "Examples:\n\n"
@@ -4620,10 +4654,139 @@ int main(int argc, char **argv) {
     config.optimize_csv_file = NULL;
     config.optimize_max_iterations = 50;
     config.optimize_min_requests = 1000;
-    
+
+    /* Initialize config persistence */
+    config_persist_init();
+    config.save_config = 0;
+    config.no_save_config = 0;
+
+    /* Load saved configuration if exists */
+    persisted_config_t saved_config;
+    memset(&saved_config, 0, sizeof(saved_config));
+    if (config_persist_load(&saved_config) == 0) {
+        /* Apply saved configuration as defaults */
+        if (saved_config.num_clients > 0) config.numclients = saved_config.num_clients;
+        if (saved_config.num_threads > 0) config.num_threads = saved_config.num_threads;
+        if (saved_config.pipeline > 0) config.pipeline = saved_config.pipeline;
+        if (saved_config.requests > 0) config.requests = saved_config.requests;
+        if (saved_config.keyspacelen > 0) config.keyspacelen = saved_config.keyspacelen;
+        if (saved_config.dbnum > 0) config.conn_info.input_dbnum = saved_config.dbnum;
+        if (saved_config.csv) config.csv = saved_config.csv;
+        if (saved_config.loop) config.loop = saved_config.loop;
+        if (saved_config.idlemode) config.idlemode = saved_config.idlemode;
+        if (saved_config.keepalive > 0) config.keepalive = saved_config.keepalive;
+        if (saved_config.precision > 0) config.precision = saved_config.precision;
+        if (saved_config.cluster_mode) config.cluster_mode = saved_config.cluster_mode;
+        if (saved_config.resp3) config.resp3 = saved_config.resp3;
+
+        /* Apply search parameters */
+        if (saved_config.dataset) config.dataset_name = sdsnew(saved_config.dataset);
+        if (saved_config.search_name) config.search.name = sdsnew(saved_config.search_name);
+        if (saved_config.search_algorithm) config.search.algorithm = sdsnew(saved_config.search_algorithm);
+        if (saved_config.search_prefix) config.search.prefix = sdsnew(saved_config.search_prefix);
+        if (saved_config.vector_field) config.search.vector_field = sdsnew(saved_config.vector_field);
+        if (saved_config.vector_dim > 0) config.search.vector_dim = saved_config.vector_dim;
+        if (saved_config.tag_field) config.search.tag_field = sdsnew(saved_config.tag_field);
+        if (saved_config.numeric_field) config.search.numeric_field = sdsnew(saved_config.numeric_field);
+        if (saved_config.ef_search > 0) config.search.ef_search = saved_config.ef_search;
+        if (saved_config.ef_construction > 0) config.search.ef_construction = saved_config.ef_construction;
+        if (saved_config.m > 0) config.search.m = saved_config.m;
+        if (saved_config.k > 0) config.search.k = saved_config.k;
+        if (saved_config.metric) config.search.metric = sdsnew(saved_config.metric);
+        if (saved_config.nocontent) config.search.nocontent = saved_config.nocontent;
+        if (saved_config.localonly) config.search.localonly = saved_config.localonly;
+        if (saved_config.use_filtered_search) config.use_filtered_search = saved_config.use_filtered_search;
+
+        /* Apply optimizer parameters */
+        if (saved_config.optimize_enabled) config.optimize_enabled = saved_config.optimize_enabled;
+        if (saved_config.optimize_objective) config.optimize_objective = sdsnew(saved_config.optimize_objective);
+        if (saved_config.optimize_csv_file) config.optimize_csv_file = sdsnew(saved_config.optimize_csv_file);
+        if (saved_config.optimize_max_iterations > 0) config.optimize_max_iterations = saved_config.optimize_max_iterations;
+        if (saved_config.optimize_min_requests > 0) config.optimize_min_requests = saved_config.optimize_min_requests;
+
+        /* Apply auth parameters */
+        if (saved_config.auth) config.conn_info.auth = sdsnew(saved_config.auth);
+        if (saved_config.user) config.conn_info.user = sdsnew(saved_config.user);
+
+        /* Apply TLS parameters */
+#ifdef USE_OPENSSL
+        if (saved_config.tls_cert) config.sslconfig.cert = strdup(saved_config.tls_cert);
+        if (saved_config.tls_key) config.sslconfig.key = strdup(saved_config.tls_key);
+        if (saved_config.tls_cacert) config.sslconfig.cacert = strdup(saved_config.tls_cacert);
+        if (saved_config.tls_cacertdir) config.sslconfig.cacertdir = strdup(saved_config.tls_cacertdir);
+        if (saved_config.tls_skip_verify) config.sslconfig.skip_cert_verify = saved_config.tls_skip_verify;
+        if (saved_config.sni) config.sslconfig.sni = strdup(saved_config.sni);
+#endif
+    }
+
     i = parseOptions(argc, argv);
     argc -= i;
     argv += i;
+
+    /* Save configuration after successful parsing unless --no-save-config */
+    if (!config.no_save_config && config.tests != NULL) {
+        persisted_config_t config_to_save;
+        memset(&config_to_save, 0, sizeof(config_to_save));
+
+        /* Basic parameters */
+        config_to_save.num_clients = config.numclients;
+        config_to_save.num_threads = config.num_threads;
+        config_to_save.pipeline = config.pipeline;
+        config_to_save.requests = config.requests;
+        config_to_save.keyspacelen = config.keyspacelen;
+        config_to_save.dbnum = config.conn_info.input_dbnum;
+        config_to_save.csv = config.csv;
+        config_to_save.loop = config.loop;
+        config_to_save.idlemode = config.idlemode;
+        config_to_save.keepalive = config.keepalive;
+        config_to_save.precision = config.precision;
+        config_to_save.cluster_mode = config.cluster_mode;
+        config_to_save.resp3 = config.resp3;
+
+        /* Search parameters */
+        if (config.dataset_name) config_to_save.dataset = config.dataset_name;
+        if (config.search.name) config_to_save.search_name = config.search.name;
+        if (config.search.algorithm) config_to_save.search_algorithm = config.search.algorithm;
+        if (config.search.prefix) config_to_save.search_prefix = config.search.prefix;
+        if (config.search.vector_field) config_to_save.vector_field = config.search.vector_field;
+        config_to_save.vector_dim = config.search.vector_dim;
+        if (config.search.tag_field) config_to_save.tag_field = config.search.tag_field;
+        if (config.search.numeric_field) config_to_save.numeric_field = config.search.numeric_field;
+        config_to_save.ef_search = config.search.ef_search;
+        config_to_save.ef_construction = config.search.ef_construction;
+        config_to_save.m = config.search.m;
+        config_to_save.k = config.search.k;
+        if (config.search.metric) config_to_save.metric = config.search.metric;
+        config_to_save.nocontent = config.search.nocontent;
+        config_to_save.localonly = config.search.localonly;
+        config_to_save.use_filtered_search = config.use_filtered_search;
+
+        /* Optimizer parameters */
+        config_to_save.optimize_enabled = config.optimize_enabled;
+        if (config.optimize_objective) config_to_save.optimize_objective = config.optimize_objective;
+        if (config.optimize_csv_file) config_to_save.optimize_csv_file = config.optimize_csv_file;
+        config_to_save.optimize_max_iterations = config.optimize_max_iterations;
+        config_to_save.optimize_min_requests = config.optimize_min_requests;
+
+        /* Auth parameters */
+        if (config.conn_info.auth) config_to_save.auth = config.conn_info.auth;
+        if (config.conn_info.user) config_to_save.user = config.conn_info.user;
+
+        /* TLS parameters */
+#ifdef USE_OPENSSL
+        if (config.sslconfig.cert) config_to_save.tls_cert = config.sslconfig.cert;
+        if (config.sslconfig.key) config_to_save.tls_key = config.sslconfig.key;
+        if (config.sslconfig.cacert) config_to_save.tls_cacert = config.sslconfig.cacert;
+        if (config.sslconfig.cacertdir) config_to_save.tls_cacertdir = config.sslconfig.cacertdir;
+        config_to_save.tls_skip_verify = config.sslconfig.skip_cert_verify;
+        if (config.sslconfig.sni) config_to_save.sni = config.sslconfig.sni;
+#endif
+
+        config_persist_save(&config_to_save);
+    }
+
+    /* Clean up the saved config */
+    config_persist_free(&saved_config);
 
     tag = "";
 

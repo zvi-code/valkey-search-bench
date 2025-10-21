@@ -161,6 +161,7 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/loader/dataset_id_mapping.c
     ${CMAKE_SOURCE_DIR}/loader/utils.c
     ${CMAKE_SOURCE_DIR}/loader/load_optimizer.c
+    ${CMAKE_SOURCE_DIR}/loader/config_persist.c
     ${CMAKE_SOURCE_DIR}/loader/core/adlist.c
     ${CMAKE_SOURCE_DIR}/loader/core/dict.c
     ${CMAKE_SOURCE_DIR}/loader/core/zmalloc.c
