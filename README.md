@@ -305,8 +305,12 @@ The benchmark tool now supports automatic configuration persistence to reduce re
 
 The tool checks for configuration in this order:
 
-1. **Workspace-local**: `./.valkey-benchmark.conf` (current directory)
+1. **Working directory**: `./.valkey-benchmark.conf` (current directory)
 2. **User-global**: `~/.valkey-benchmark/config.conf` (home directory)
+
+**Session Isolation**: Set `VALKEY_BENCHMARK_SESSION=name` for session-specific configs:
+- Working directory: `./.valkey-benchmark-{session}.conf`
+- User-global: `~/.valkey-benchmark/config-{session}.conf`
 
 ### Usage Examples
 
@@ -332,6 +336,15 @@ The tool checks for configuration in this order:
 
 # Run without saving this configuration
 ./bin/valkey-benchmark -t vec-query --dataset test-dataset --no-save-config
+
+# Session isolation - different sessions don't interfere
+export VALKEY_BENCHMARK_SESSION=experiment1
+./bin/valkey-benchmark -t vec-query -c 10 --threads 4
+
+export VALKEY_BENCHMARK_SESSION=experiment2
+./bin/valkey-benchmark -t vec-query -c 20 --threads 8
+
+# Each session maintains its own config independently
 ```
 
 ### Configuration Management Flags
@@ -385,6 +398,7 @@ The following parameters are automatically persisted:
 
 - **Faster Iteration**: No need to retype long command lines
 - **Consistent Testing**: Ensures consistent parameters across benchmark runs
+- **Session Isolation**: Multiple experiments can run independently with separate configs
 - **Team Workflows**: Share workspace-local configs via version control
 - **Parameter Memory**: Never lose working configurations
 

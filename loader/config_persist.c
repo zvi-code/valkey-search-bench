@@ -44,11 +44,24 @@ char *config_persist_get_path(void) {
         return config_path;
     }
 
-    if (access(CONFIG_FILE_NAME, F_OK) == 0) {
-        snprintf(config_path, sizeof(config_path), "%s", CONFIG_FILE_NAME);
+    char local_config[1024];
+    char global_config[4096];
+    char *session_id = getenv("VALKEY_BENCHMARK_SESSION");
+
+    /* Build config filenames based on session */
+    if (session_id) {
+        snprintf(local_config, sizeof(local_config), ".valkey-benchmark-%s.conf", session_id);
+    } else {
+        snprintf(local_config, sizeof(local_config), "%s", CONFIG_FILE_NAME);
+    }
+
+    /* Priority 1: Working directory (current directory) */
+    if (access(local_config, F_OK) == 0) {
+        snprintf(config_path, sizeof(config_path), "%s", local_config);
         return config_path;
     }
 
+    /* Priority 2: User global directory */
     char *home = getenv("HOME");
     if (!home) {
         struct passwd *pw = getpwuid(getuid());
@@ -61,17 +74,24 @@ char *config_persist_get_path(void) {
         char dir_path[4096];
         snprintf(dir_path, sizeof(dir_path), "%s/%s", home, GLOBAL_CONFIG_DIR);
 
+        if (session_id) {
+            snprintf(global_config, sizeof(global_config), "config-%s.conf", session_id);
+        } else {
+            snprintf(global_config, sizeof(global_config), "config.conf");
+        }
+
         if (ensure_directory(dir_path) == 0) {
-            int ret = snprintf(config_path, sizeof(config_path), "%s/config.conf", dir_path);
+            int ret = snprintf(config_path, sizeof(config_path), "%s/%s", dir_path, global_config);
             if (ret >= sizeof(config_path)) {
                 /* Path too long, fallback to local config */
-                snprintf(config_path, sizeof(config_path), "%s", CONFIG_FILE_NAME);
+                snprintf(config_path, sizeof(config_path), "%s", local_config);
             }
             return config_path;
         }
     }
 
-    snprintf(config_path, sizeof(config_path), "%s", CONFIG_FILE_NAME);
+    /* Fallback: Use local config in current directory */
+    snprintf(config_path, sizeof(config_path), "%s", local_config);
     return config_path;
 }
 
