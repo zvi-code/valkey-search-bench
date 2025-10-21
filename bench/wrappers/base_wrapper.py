@@ -68,7 +68,8 @@ class BenchmarkConfig:
         num_requests: Number of requests to execute (default: 10000)
         ef_search: HNSW ef_search parameter (optional)
         operation: Operation type for -t flag (default: "vec-query")
-        extra_args: Additional CLI arguments as list
+        extra_args: Additional CLI arguments as list (appended at end)
+        prefix_args: Arguments to insert before -t flag (e.g., optimizer flags)
     """
     host: str
     dataset: Optional[str] = None
@@ -78,6 +79,7 @@ class BenchmarkConfig:
     ef_search: Optional[int] = None
     operation: str = "vec-query"
     extra_args: List[str] = field(default_factory=list)
+    prefix_args: List[str] = field(default_factory=list)
     
     def to_args(self) -> List[str]:
         """Convert configuration to CLI arguments.
@@ -369,8 +371,8 @@ class ValKeyBenchmarkWrapper:
         # Use operation override if provided
         op = operation or config.operation
         
-        # Build command
-        args = [self.binary, "-t", op] + config.to_args()
+        # Build command: [binary] [prefix_args] [-t op] [to_args()]
+        args = [self.binary] + config.prefix_args + ["-t", op] + config.to_args()
         
         # Auto-detect and add cluster flag if needed
         if self._detect_cluster(config.host):

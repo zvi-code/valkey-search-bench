@@ -6,21 +6,21 @@ Copyright (c) 2024-present, Zvi Schneider
 
 Auto-optimized Query Benchmark
 
-Automatically finds optimal configuration for maximum query throughput
-while maintaining reasonable latency. Only requires dataset and host.
+Leverages valkey-benchmark's built-in optimizer to find optimal configuration
+for maximum query throughput with constraints. Only requires dataset and host.
 
 The script:
-1. Detects dataset properties (dimensions, size)
-2. Determines optimal ef_search, num_clients, and num_threads
-3. Runs benchmark with optimal configuration
+1. Detects dataset properties (dimensions, size) 
+2. Sets up optimization objective and constraints
+3. Uses valkey-benchmark --optimize for closed-loop search
 4. Reports results and the exact command used
 
 Example usage:
     # Simple - just dataset name and host
     ./run_queries.py --host localhost --dataset openai-large-5m
     
-    # With custom target recall
-    ./run_queries.py --host localhost --dataset sift-128 --target-recall 0.98
+    # With custom constraints
+    ./run_queries.py --host localhost --dataset sift-128 --target-recall 0.98 --max-p99-latency 50
 """
 
 import sys
@@ -151,16 +151,14 @@ def detect_dataset_info(dataset_path: str) -> tuple:
         raise BenchmarkError(f"Could not detect dataset info: {e}")
 
 
-def estimate_optimal_config(num_vectors: int, dimensions: int, target_recall: float):
-    """Estimate optimal configuration based on dataset properties.
+def estimate_initial_config(num_vectors: int, dimensions: int):
+    """Estimate reasonable starting configuration for optimizer.
     
-    Heuristics:
-    - ef_search: Higher for high recall, scales with dimensions
-    - num_clients: More clients for throughput, but watch latency
-    - num_threads: Based on available CPU cores
+    The optimizer will adjust these values automatically, but providing
+    reasonable starting points helps it converge faster.
     
     Returns:
-        (ef_search_min, ef_search_max, num_clients_max, num_threads)
+        (ef_search, num_clients, num_threads)
     """
     import os
     
@@ -168,38 +166,23 @@ def estimate_optimal_config(num_vectors: int, dimensions: int, target_recall: fl
     num_cores = os.cpu_count() or 4
     num_threads = min(num_cores, 8)  # Cap at 8 for most workloads
     
-    # ef_search estimation based on dimensions and target recall
+    # ef_search starting point based on dimensions
     if dimensions <= 128:
-        # Small dimensions (SIFT, MNIST)
-        ef_base = 50
+        ef_search = 100
     elif dimensions <= 512:
-        # Medium dimensions (GloVe)
-        ef_base = 100
+        ef_search = 150
     else:
-        # Large dimensions (OpenAI, Cohere)
-        ef_base = 150
+        ef_search = 200
     
-    # Scale by target recall
-    if target_recall >= 0.99:
-        ef_multiplier = 3.0
-    elif target_recall >= 0.95:
-        ef_multiplier = 2.0
-    else:
-        ef_multiplier = 1.5
-    
-    ef_search_min = int(ef_base * ef_multiplier)
-    ef_search_max = int(ef_base * ef_multiplier * 2)
-    
-    # num_clients: More clients = more throughput, but watch latency
-    # Start conservative, let binary search find optimal
+    # num_clients: Start conservative, optimizer will increase if needed
     if num_vectors and num_vectors < 100000:
-        num_clients_max = 50
+        num_clients = 20
     elif num_vectors and num_vectors < 1000000:
-        num_clients_max = 100
+        num_clients = 50
     else:
-        num_clients_max = 200
+        num_clients = 100
     
-    return ef_search_min, ef_search_max, num_clients_max, num_threads
+    return ef_search, num_clients, num_threads
 
 
 def main():
@@ -208,21 +191,24 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Simplest usage - automatic optimization
+  # Simplest usage - maximize QPS with 95%% recall
   %(prog)s --host localhost --dataset openai-large-5m
   
-  # With custom target recall
+  # Tighter recall requirement
   %(prog)s --host localhost --dataset sift-128 --target-recall 0.98
   
-  # With custom number of requests
-  %(prog)s --host localhost --dataset cohere-large-10m --num-requests 50000
+  # Custom latency constraint
+  %(prog)s --host localhost --dataset cohere-large-10m --max-p99-latency 100
+  
+  # Minimize latency instead of maximizing QPS
+  %(prog)s --host localhost --dataset glove-50 --objective minimize:p99_latency
 
-The script automatically:
-  - Detects dataset dimensions and size
-  - Determines optimal ef_search range
-  - Finds optimal number of clients via binary search
-  - Runs benchmark with optimal configuration
-  - Reports exact command used for reproducibility
+The script uses valkey-benchmark's native optimizer to:
+  - Automatically detect dataset properties
+  - Run closed-loop search for optimal parameters
+  - Find best ef_search, num_clients, and num_threads
+  - Satisfy recall and latency constraints
+  - Report exact command for reproducibility
         """
     )
     
@@ -244,35 +230,43 @@ The script automatically:
         "--target-recall",
         type=float,
         default=0.95,
-        help="Target recall threshold (default: 0.95)"
+        help="Minimum target recall threshold (default: 0.95)"
     )
     parser.add_argument(
         "--max-p99-latency",
         type=float,
-        help="Maximum acceptable P99 latency in ms (default: auto - 20ms for small dims, 50ms for large)"
+        help="Maximum acceptable P99 latency in ms (default: auto based on dimensions)"
     )
     parser.add_argument(
         "--num-requests",
         type=int,
         default=10000,
-        help="Number of requests to run (default: 10000)"
+        help="Number of requests per optimization iteration (default: 10000)"
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=50,
+        help="Maximum optimizer iterations (default: 50)"
+    )
+    parser.add_argument(
+        "--objective",
+        default="maximize:qps",
+        help="Optimization objective (default: maximize:qps). "
+             "Format: 'maximize:metric' or 'minimize:metric'. "
+             "Metrics: qps, avg_latency, p99_latency, recall_avg, etc."
     )
     
     # Output
     parser.add_argument(
         "--output",
-        help="Save results to CSV file"
+        help="Save optimization results to CSV file"
     )
     parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
         help="Enable verbose output"
-    )
-    parser.add_argument(
-        "--skip-optimization",
-        action="store_true",
-        help="Skip optimization, just run with estimated config once"
     )
     
     args = parser.parse_args()
@@ -301,129 +295,126 @@ The script automatically:
     print(f"{'='*70}")
     print(f"Host:        {args.host}")
     print(f"Dataset:     {dataset_name}")
-    print(f"Index Name:  {dataset_name}")
     print(f"File Path:   {dataset_path}")
     print(f"{'='*70}\n")
     
-    # Step 1: Detect dataset properties
+    # Step 1: Detect dataset properties and generate index name + prefix
     print("📊 Detecting dataset properties...")
     try:
         num_vectors, dimensions = detect_dataset_info(dataset_path)
         if num_vectors:
             print(f"   Vectors:    {num_vectors:,}")
         print(f"   Dimensions: {dimensions}")
+        
+        # Generate index name in the format: dataset-{numVectors}-{dimensions}-{k}
+        # Example: openai-large-5m-5M-1536-100
+        if num_vectors:
+            if num_vectors >= 1_000_000:
+                vec_str = f"{num_vectors // 1_000_000}M"
+            elif num_vectors >= 1_000:
+                vec_str = f"{num_vectors // 1_000}K"
+            else:
+                vec_str = str(num_vectors)
+            index_name = f"{dataset_name}-{vec_str}-{dimensions}-100"
+        else:
+            index_name = f"{dataset_name}-{dimensions}-100"
+        
+        # Generate search prefix based on dataset name
+        # Format: zvec_{shortname}:
+        # Examples: zvec_openai5m:, zvec_cohere100k:, zvec_sift:
+        short_name = dataset_name.replace('-', '').replace('_', '')
+        search_prefix = f"zvec_{short_name}:"
+        
+        print(f"   Index name:    {index_name}")
+        print(f"   Search prefix: {search_prefix}")
     except BenchmarkError as e:
         print(f"   Warning: {e}")
         print(f"   Continuing with default configuration...")
-        dimensions = 128
+        dimensions = 1536
         num_vectors = None
+        index_name = f"{dataset_name}-1536-100"  # Fallback
+        short_name = dataset_name.replace('-', '').replace('_', '')
+        search_prefix = f"zvec_{short_name}:"
     
-    # Step 2: Estimate optimal configuration
-    print(f"\n🔧 Estimating optimal configuration...")
-    ef_min, ef_max, max_clients, num_threads = estimate_optimal_config(
-        num_vectors, dimensions, args.target_recall
-    )
+    # Step 2: Estimate initial configuration for optimizer
+    print(f"\n🔧 Setting up optimizer configuration...")
+    ef_search, num_clients, num_threads = estimate_initial_config(num_vectors, dimensions)
     
-    print(f"   ef_search range:   [{ef_min}, {ef_max}]")
-    print(f"   num_threads:       {num_threads}")
-    print(f"   max_clients:       {max_clients}")
-    print(f"   target_recall:     {args.target_recall:.2%}")
+    print(f"   Initial ef_search: {ef_search}")
+    print(f"   Initial clients:   {num_clients}")
+    print(f"   Threads:           {num_threads}")
     
     # Auto-determine latency threshold if not specified
     if args.max_p99_latency is None:
         if dimensions <= 128:
-            max_p99_latency = 20.0  # Fast for small dims
+            max_p99_latency = 50.0  # Small dims
         elif dimensions <= 512:
-            max_p99_latency = 30.0  # Medium
+            max_p99_latency = 100.0  # Medium dims
         else:
-            max_p99_latency = 50.0  # More lenient for large dims
+            max_p99_latency = 200.0  # Large dims - more lenient for network + computation
     else:
         max_p99_latency = args.max_p99_latency
     
-    print(f"   max_p99_latency:   {max_p99_latency:.1f}ms")
+    print(f"\n🎯 Optimization goals:")
+    print(f"   Objective:         {args.objective}")
+    print(f"   Min recall:        {args.target_recall:.0%}")
+    print(f"   Max P99 latency:   {max_p99_latency:.1f}ms")
+    print(f"   Max iterations:    {args.max_iterations}")
     
-    # Step 3: Search for optimal ef_search
-    print(f"\n🔍 Searching for optimal ef_search...")
+    # Step 3: Run optimizer using native valkey-benchmark --optimize
+    print(f"\n🔍 Running optimizer (closed-loop search)...\n")
     
-    best_result = None
-    best_ef = None
+    # Build optimization command using native optimizer
+    # Put optimizer flags in prefix_args (before -t), other params use normal config
+    config = BenchmarkConfig(
+        host=args.host,
+        dataset=dataset_path,
+        num_clients=num_clients,
+        num_threads=num_threads,
+        num_requests=args.num_requests,
+        ef_search=ef_search,
+        operation="vec-query",
+        prefix_args=[
+            "--search",  # Boolean flag to enable search workload
+            "--search-name", index_name,  # Index name with format: dataset-{M/K}-{dim}-{k}
+            "--search-prefix", search_prefix,  # Prefix for keys: zvec_{name}:
+            "--vector-dim", str(dimensions),  # Vector dimensions
+            "--optimize",
+            "--optimize-objective", args.objective,
+            "--optimize-constraint", f"recall_avg:gt:{args.target_recall}",
+            "--optimize-constraint", f"p99_latency:lt:{max_p99_latency}",
+            "--optimize-max-iterations", str(args.max_iterations),
+            "--optimize-min-requests", str(args.num_requests),
+        ]
+    )
     
-    # Try a few ef_search values in the range
-    ef_values = [ef_min, (ef_min + ef_max) // 2, ef_max]
+    # Add CSV output if requested
+    if args.output:
+        config.extra_args.extend(["--optimize-csv", args.output])
     
-    for ef_search in ef_values:
-        print(f"\n   Testing ef_search={ef_search}...")
-        
-        base_config = BenchmarkConfig(
-            host=args.host,
-            dataset=dataset_path,
-            num_clients=10,  # Start conservative
-            num_threads=num_threads,
-            num_requests=args.num_requests,
-            ef_search=ef_search,
-            operation="vec-query",
-            extra_args=["--search-name", dataset_name]  # Use dataset name as index name
-        )
-        
-        if args.skip_optimization:
-            # Just run once with estimated config
-            with wrapper.stage("vec-query", tag=f"ef_{ef_search}"):
-                try:
-                    result = wrapper.run(base_config)
-                    print(f"   ✓ QPS={result.qps:.1f}, "
-                          f"Recall={result.recall_avg:.2%}, "
-                          f"P99={result.latency_p99:.3f}ms")
-                    
-                    if result.recall_avg >= args.target_recall:
-                        best_result = result
-                        best_ef = ef_search
-                        break
-                except BenchmarkError as e:
-                    print(f"   ✗ Failed: {e}")
-                    continue
-        else:
-            # Find optimal num_clients for this ef_search
-            try:
-                result = wrapper.find_max_qps_with_constraints(
-                    base_config=base_config,
-                    min_recall=args.target_recall,
-                    max_latency_p99=max_p99_latency,
-                    param_name="num_clients",
-                    min_val=5,
-                    max_val=max_clients,
-                )
-                
-                if result:
-                    print(f"   ✓ Optimal: clients={result.config.num_clients}, "
-                          f"QPS={result.qps:.1f}, "
-                          f"Recall={result.recall_avg:.2%}, "
-                          f"P99={result.latency_p99:.3f}ms")
-                    
-                    if best_result is None or result.qps > best_result.qps:
-                        best_result = result
-                        best_ef = ef_search
-                else:
-                    print(f"   ✗ Could not meet constraints")
-            
-            except BenchmarkError as e:
-                print(f"   ✗ Failed: {e}")
-                continue
-        
-        # If we found a good config and are in fast mode, stop
-        if args.skip_optimization and best_result:
-            break
+    # Print the full command that will be executed
+    full_cmd = [wrapper.binary] + config.prefix_args + ["-t", config.operation] + config.to_args()
+    print(f"Command: {' '.join(full_cmd)}\n")
+    
+    # Run with stage monitoring
+    with wrapper.stage("optimize"):
+        try:
+            result = wrapper.run(config)
+            best_result = result
+        except BenchmarkError as e:
+            print(f"\n❌ Optimization failed: {e}\n", file=sys.stderr)
+            best_result = None
     
     # Step 4: Report results
     print(f"\n{'='*70}")
     if best_result:
-        print("✅ OPTIMAL CONFIGURATION FOUND")
+        print("✅ OPTIMIZATION COMPLETE")
         print(f"{'='*70}\n")
         
-        print("Configuration:")
+        print("Optimal Configuration:")
         print(f"  ef_search:   {best_result.config.ef_search}")
         print(f"  num_clients: {best_result.config.num_clients}")
         print(f"  num_threads: {best_result.config.num_threads}")
-        print(f"  num_requests: {best_result.config.num_requests}")
         
         print(f"\nPerformance:")
         print(f"  QPS:         {best_result.qps:.1f} requests/sec")
@@ -442,18 +433,18 @@ The script automatically:
             overhead = best_result.latency_avg - best_result.baseline_latency_avg
             print(f"\nBaseline:")
             print(f"  Network RTT: {best_result.baseline_latency_avg:.3f} ms")
-            print(f"  Overhead:    {overhead:.3f} ms")
+            print(f"  Search Overhead: {overhead:.3f} ms")
         
         # Show exact command for reproducibility
         print(f"\n{'='*70}")
-        print("📋 Exact Command for Reproducibility:")
+        print("📋 Command to Reproduce This Configuration:")
         print(f"{'='*70}")
         
         cluster_flag = "--cluster" if wrapper._detect_cluster(args.host) else ""
         cmd = (
             f"{wrapper.binary} -t vec-query -h {args.host} "
             f"--dataset {dataset_path} "
-            f"--search-name {dataset_name} "
+            f"--search --search-name {index_name} "
             f"-c {best_result.config.num_clients} "
             f"--threads {best_result.config.num_threads} "
             f"-n {best_result.config.num_requests} "
@@ -465,22 +456,22 @@ The script automatically:
         print(f"\n{cmd}\n")
         print(f"{'='*70}")
         
-        # Save to CSV if requested
         if args.output:
-            wrapper.save_results_csv([best_result], args.output)
-            print(f"\n✅ Results saved to: {args.output}")
+            print(f"\n✅ Optimization results saved to: {args.output}")
         
         print()
         return 0
     else:
-        print("❌ COULD NOT FIND OPTIMAL CONFIGURATION")
+        print("❌ OPTIMIZATION FAILED")
         print(f"{'='*70}\n")
-        print(f"Could not achieve target recall of {args.target_recall:.2%}")
-        print(f"with P99 latency <= {max_p99_latency:.1f}ms\n")
+        print(f"Could not achieve constraints:")
+        print(f"  - Recall >= {args.target_recall:.0%}")
+        print(f"  - P99 latency <= {max_p99_latency:.1f}ms\n")
         print("Suggestions:")
         print(f"  - Lower --target-recall (try 0.90 or 0.85)")
-        print(f"  - Increase --max-p99-latency")
-        print(f"  - Check dataset and index configuration")
+        print(f"  - Increase --max-p99-latency (current: {max_p99_latency:.1f}ms)")
+        print(f"  - Increase --max-iterations (current: {args.max_iterations})")
+        print(f"  - Check that index '{index_name}' exists and is configured correctly")
         print(f"{'='*70}\n")
         return 1
 

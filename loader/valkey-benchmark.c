@@ -450,7 +450,7 @@ static struct config {
     int no_baseline;              /* Disable baseline measurement */
     int baseline_measured;        /* Flag indicating baseline has been measured */
     int skip_latency_report;      /* Skip printing latency report (used internally) */
-} config;
+} config = {0};
 
 /* Recall statistics for dataset mode */
 typedef struct {
@@ -525,10 +525,6 @@ static void updateRecallStatsExt(float recall) {
 /* Reset statistics for clean benchmark run (used by optimizer) */
 static void resetBenchmarkStats(void) {
     /* Reset request counters */
-    atomic_store_explicit(&config.requests_issued, 0, memory_order_relaxed);
-    atomic_store_explicit(&config.requests_finished, 0, memory_order_relaxed);
-    atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
-    config.last_printed_bytes = 0;
     config.totlatency = 0;
     
     /* Reset recall statistics */
@@ -541,14 +537,6 @@ static void resetBenchmarkStats(void) {
     if (config.use_dataset) {
         atomic_store_explicit(&config.dataset_prefill_counter, 0, memory_order_relaxed);
         atomic_store_explicit(&config.dataset_query_counter, 0, memory_order_relaxed);
-    }
-    
-    /* Reset histograms */
-    if (config.latency_histogram) {
-        hdr_reset(config.latency_histogram);
-    }
-    if (config.current_sec_latency_histogram) {
-        hdr_reset(config.current_sec_latency_histogram);
     }
 }
 
@@ -3183,6 +3171,9 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
                                          &after_search_background_indexing_status);
         after_ftinfo = getFtInfoStatistics(config.search.name, config.selected_node_count, config.selected_nodes, config.ct);
         after_info_all = getInfoCluster(config.selected_node_count, config.selected_nodes, config.ct);
+        if (last_info_all != NULL && last_ftinfo != NULL && last_search_info != NULL) {
+            // Compare snapshots and print diffs
+        }
         compareInfoSnapshots(config.selected_node_count, config.selected_nodes, config.ct,
                              last_info_all, after_info_all, last_ftinfo, after_ftinfo, last_search_info, after_search_info);
         freeClusterSnapshot(last_search_info);
