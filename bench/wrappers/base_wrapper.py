@@ -22,7 +22,7 @@ Example:
 """
 
 from dataclasses import dataclass, field, replace
-from typing import List, Optional, Dict, Any, Callable
+from typing import List, Optional, Dict, Any, Callable, Tuple
 from pathlib import Path
 from contextlib import contextmanager
 import subprocess
@@ -31,6 +31,7 @@ import re
 import sys
 import os
 import csv as csv_module
+import struct
 
 
 # ============================================================================
@@ -50,6 +51,172 @@ class BinaryNotFoundError(BenchmarkError):
 class ParseError(BenchmarkError):
     """Raised when output parsing fails."""
     pass
+
+
+# ============================================================================
+# Dataset Utilities
+# ============================================================================
+
+def find_dataset_path(dataset_name: str) -> str:
+    """Find dataset file path from dataset name.
+    
+    Looks for dataset in standard locations:
+    1. BENCHMARK_HOME/datasets/ if BENCHMARK_HOME is set
+    2. datasets/ directory (relative to project root)
+    3. Current directory
+    
+    Args:
+        dataset_name: Dataset name (e.g., 'openai-large-5m' or 'sift-128.bin')
+    
+    Returns:
+        Resolved absolute path to dataset file
+    
+    Raises:
+        BenchmarkError: If dataset file cannot be found
+    """
+    search_paths = []
+    
+    # Add standard locations
+    benchmark_home = os.environ.get('BENCHMARK_HOME')
+    if benchmark_home:
+        search_paths.append(Path(benchmark_home) / "datasets")
+    
+    # Relative to project root (3 levels up from base_wrapper.py)
+    project_root = Path(__file__).parent.parent.parent
+    search_paths.append(project_root / "datasets")
+    
+    # Current directory
+    search_paths.append(Path.cwd())
+    
+    # Try with .bin extension if not provided
+    if not dataset_name.endswith('.bin'):
+        dataset_name = f"{dataset_name}.bin"
+    
+    for search_path in search_paths:
+        candidate = search_path / dataset_name
+        if candidate.exists():
+            return str(candidate.resolve())
+    
+    raise BenchmarkError(
+        f"Dataset '{dataset_name}' not found in:\n" + 
+        "\n".join(f"  - {p}" for p in search_paths)
+    )
+
+
+def detect_dataset_info(dataset_path: str) -> Tuple[int, int]:
+    """Read dataset binary header to get dimensions and vector count.
+    
+    Binary format (first 4KB header):
+        0-3:   Magic number (0xDECDB001)
+        4-7:   Version (uint32)
+        8-263: Dataset name (char[256])
+        264-267: distance_metric, dtype, has_metadata, padding (4 bytes)
+        268-271: Dimensions (uint32)
+        272-279: Number of vectors (uint64)
+        280-287: Number of queries (uint64)
+    
+    Args:
+        dataset_path: Path to binary dataset file
+    
+    Returns:
+        Tuple of (dimensions, num_vectors)
+    
+    Raises:
+        BenchmarkError: If dataset has invalid format or magic number
+        IOError: If dataset file cannot be read
+    """
+    with open(dataset_path, 'rb') as f:
+        # Read header (4KB)
+        header = f.read(4096)
+        
+        if len(header) < 288:
+            raise BenchmarkError(
+                f"Dataset file too small: {len(header)} bytes "
+                f"(expected at least 288 bytes for header)"
+            )
+        
+        # Parse header fields at correct offsets
+        magic, version = struct.unpack('<II', header[0:8])
+        
+        # Validate magic number
+        expected_magic = 0xDECDB001
+        if magic != expected_magic:
+            raise BenchmarkError(
+                f"Invalid dataset magic number: 0x{magic:08X} "
+                f"(expected 0x{expected_magic:08X})"
+            )
+        
+        # Skip dataset_name (256 bytes) and flags (4 bytes) to get to dimensions
+        dimensions = struct.unpack('<I', header[268:272])[0]
+        num_vectors = struct.unpack('<Q', header[272:280])[0]
+        
+        return dimensions, num_vectors
+
+
+def generate_index_name(dataset_name: str, num_vectors: int, dimensions: int, k: int = 100) -> str:
+    """Generate index name following standard naming convention.
+    
+    Format: {dataset}-{vector_count}-{dimensions}-{k}
+    Examples:
+        - openai-large-5m-5M-1536-100
+        - sift-128-1M-128-100
+    
+    Args:
+        dataset_name: Base dataset name (with or without .bin extension)
+        num_vectors: Number of vectors in dataset
+        dimensions: Vector dimensionality
+        k: Number of neighbors (default: 100)
+    
+    Returns:
+        Formatted index name string
+    """
+    # Remove .bin extension if present
+    base_name = Path(dataset_name).stem
+    
+    # Format vector count: 5000000 -> "5M", 100000 -> "100K"
+    if num_vectors >= 1_000_000:
+        vec_str = f"{num_vectors // 1_000_000}M"
+    elif num_vectors >= 1_000:
+        vec_str = f"{num_vectors // 1_000}K"
+    else:
+        vec_str = str(num_vectors)
+    
+    # Index name format: dataset-{M/K}-{dimensions}-{k}
+    return f"{base_name}-{vec_str}-{dimensions}-{k}"
+
+
+def generate_search_prefix(dataset_name: str) -> str:
+    """Generate search key prefix following standard naming convention.
+    
+    Format: zvec_{shortname}:
+    Examples:
+        - openai-large-5m -> zvec_openai5m:
+        - openai-medium-500k -> zvec_openai500k
+        - sift-128 -> zvec_sift128
+        - cohere-large-10m -> zvec_cohere10m
+    
+    The short name removes size qualifiers (large/medium/small) and dashes.
+    This matches the actual key format in the cluster.
+    
+    Args:
+        dataset_name: Base dataset name (with or without .bin extension)
+    
+    Returns:
+        Formatted search prefix string (WITHOUT trailing colon)
+    """
+    # Remove .bin extension if present
+    base_name = Path(dataset_name).stem
+    
+    # Remove size qualifiers (large, medium, small) and their surrounding dashes
+    short_name = base_name.lower()
+    for size_word in ['-large-', '-medium-', '-small-', '-wiki-']:
+        short_name = short_name.replace(size_word, '-')
+    
+    # Remove all dashes and underscores for short name
+    short_name = short_name.replace('-', '').replace('_', '')
+    
+    # Search prefix format: zvec_{shortname} (no trailing colon)
+    return f"zvec_{short_name}:"
 
 
 # ============================================================================
@@ -323,7 +490,7 @@ class ValKeyBenchmarkWrapper:
         emits them for wrapper-level stages (e.g., during binary search iterations).
         
         Args:
-            name: Stage name (typically matches -t operation: vec-query, vec-ground-truth, etc.)
+            name: Stage name (typically matches -t operation: vec-query, vec-load, etc.)
             tag: Optional tag for stage variant (e.g., "ef_100", "clients_20")
         
         Example:

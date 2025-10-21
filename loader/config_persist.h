@@ -29,7 +29,6 @@ typedef struct {
     int idlemode;
     int keepalive;
     int precision;
-    int cluster_mode;
     int resp3;
 
     /* Search parameters */
@@ -53,11 +52,14 @@ typedef struct {
     int use_filtered_search;
 
     /* Optimizer parameters */
-    int optimize_enabled;
     char *optimize_objective;
     char *optimize_csv_file;
     int optimize_max_iterations;
     int optimize_min_requests;
+    char *optimize_client_range;      /* Format: "min:max" e.g., "20:400" */
+    char *optimize_thread_range;      /* Format: "min:max" e.g., "4:10" */
+    char *optimize_ef_search_range;   /* Format: "min:max" e.g., "20:500" */
+    char *optimize_pipeline_range;    /* Format: "min:max" e.g., "1:100" */
 
     /* Authentication parameters */
     char *auth;

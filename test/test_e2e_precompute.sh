@@ -67,7 +67,7 @@ echo "Expected: ~8,000-10,000 req/s"
 echo ""
 $BENCHMARK -h $HOST --cluster --rfr 'no' \
     --use_vgen --vgen-seed $SEED --vgen-capacity $CAPACITY \
-    -t vec-ground-truth --search --vector-dim $DIMS \
+    -t vec-load --search --vector-dim $DIMS \
     --search-name $INDEX_NAME --search-prefix $PREFIX \
     -n $GROUND_TRUTH_SIZE -c 4 2>&1 | tee /tmp/vec_ingest.log | grep -E "(throughput summary|VG])"
 
@@ -102,7 +102,7 @@ $BENCHMARK -h $HOST --cluster --rfr 'no' \
     -t create-default-search-indexes -n 1 > /dev/null 2>&1
 $BENCHMARK -h $HOST --cluster --rfr 'no' \
     --use_vgen --vgen-seed $SEED --vgen-capacity $CAPACITY \
-    -t vec-ground-truth --search --vector-dim $DIMS \
+    -t vec-load --search --vector-dim $DIMS \
     --search-name $INDEX_NAME --search-prefix $PREFIX \
     -n $GROUND_TRUTH_SIZE -c 4 > /dev/null 2>&1
 echo "✓ Ground truth re-ingested"

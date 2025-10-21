@@ -28,6 +28,10 @@ from .base_wrapper import (
     BenchmarkError,
     BinaryNotFoundError,
     ParseError,
+    find_dataset_path,
+    detect_dataset_info,
+    generate_index_name,
+    generate_search_prefix,
 )
 
 __all__ = [
@@ -37,6 +41,10 @@ __all__ = [
     'BenchmarkError',
     'BinaryNotFoundError',
     'ParseError',
+    'find_dataset_path',
+    'detect_dataset_info',
+    'generate_index_name',
+    'generate_search_prefix',
 ]
 
 __version__ = '0.1.0'

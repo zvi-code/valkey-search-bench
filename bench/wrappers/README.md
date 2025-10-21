@@ -232,7 +232,7 @@ The wrapper emits stage signals to stderr for external tool coordination:
 ```
 
 **Stage Names:**
-- Typically match the `-t` operation: `vec-query`, `vec-ground-truth`, `get`, etc.
+- Typically match the `-t` operation: `vec-query`, `vec-load`, `get`, etc.
 - Can include tags for variants: `vec-query:ef_100`, `vec-query:clients_20`
 
 **External Tool Integration:**

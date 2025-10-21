@@ -194,7 +194,7 @@ pip install vectordb-bench==1.0.10 h5py pandas pyarrow numpy
 
 ```bash
 # Phase 1: Ground Truth Insertion (load ALL vectors first)
-./bin/valkey-benchmark -h $HOST --cluster --rfr no --dataset cohere-medium-1m.bin -t vec-ground-truth --search --vector-dim 768 --search-name cohere_1m --search-prefix zvec_: -n 1000000 -c 10 --clean
+./bin/valkey-benchmark -h $HOST --cluster --rfr no --dataset cohere-medium-1m.bin -t vec-load --search --vector-dim 768 --search-name cohere_1m --search-prefix zvec_: -n 1000000 -c 10 --clean
 
 # Phase 2: Query Benchmark (with recall tracking)
 ./bin/valkey-benchmark -h $HOST --cluster --rfr no --dataset cohere-medium-1m.bin -t vec-query --search --vector-dim 768 --search-name cohere_1m --search-prefix zvec_: -n 10000 -c 10 --threads 10

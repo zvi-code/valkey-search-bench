@@ -46,7 +46,7 @@ Monitor [STAGE:START/END] signals and optionally trigger perf collection.
 
 OPTIONS:
     --watch STAGE       Monitor specific stage (can be specified multiple times)
-                        e.g., --watch vec-query --watch vec-ground-truth
+                        e.g., --watch vec-query --watch vec-load
                         If not specified, monitors all stages
     
     --collect-perf      Enable perf data collection during monitored stages

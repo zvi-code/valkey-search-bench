@@ -32,7 +32,7 @@ echo ""
 
 # Ingest ground truth
 echo "[2/4] Ingesting 50K ground truth vectors..."
-./bin/valkey-benchmark -h $HOST --cluster --rfr 'no' --use_vgen --vgen-seed 42 --vgen-capacity 1000000 -t vec-ground-truth --search --vector-dim 8 --search-name new_8 --search-prefix zvec_gen_8: -n 50000 -c 4 2>&1 | grep "throughput summary"
+./bin/valkey-benchmark -h $HOST --cluster --rfr 'no' --use_vgen --vgen-seed 42 --vgen-capacity 1000000 -t vec-load --search --vector-dim 8 --search-name new_8 --search-prefix zvec_gen_8: -n 50000 -c 4 2>&1 | grep "throughput summary"
 echo ""
 
 # Test WITHOUT precompute
@@ -52,7 +52,7 @@ echo "Re-ingesting for clean test..."
     -t create-default-search-indexes -n 1 > /dev/null 2>&1
 ./bin/valkey-benchmark -h $HOST --cluster --rfr 'no' \
     --use_vgen --vgen-seed 42 --vgen-capacity 1000000 \
-    -t vec-ground-truth --search --vector-dim 8 \
+    -t vec-load --search --vector-dim 8 \
     --search-name new_8 --search-prefix zvec_gen_8: \
     -n 50000 -c 4 > /dev/null 2>&1
 echo ""

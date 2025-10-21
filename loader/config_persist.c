@@ -157,8 +157,6 @@ int config_persist_load(persisted_config_t *config) {
             config->keepalive = atoi(value);
         } else if (strcmp(key, "precision") == 0) {
             config->precision = atoi(value);
-        } else if (strcmp(key, "cluster_mode") == 0) {
-            config->cluster_mode = atoi(value);
         } else if (strcmp(key, "resp3") == 0) {
             config->resp3 = atoi(value);
         } else if (strcmp(key, "dataset") == 0) {
@@ -197,8 +195,6 @@ int config_persist_load(persisted_config_t *config) {
             config->localonly = atoi(value);
         } else if (strcmp(key, "use_filtered_search") == 0) {
             config->use_filtered_search = atoi(value);
-        } else if (strcmp(key, "optimize_enabled") == 0) {
-            config->optimize_enabled = atoi(value);
         } else if (strcmp(key, "optimize_objective") == 0) {
             set_string_field(&config->optimize_objective, value);
         } else if (strcmp(key, "optimize_csv_file") == 0) {
@@ -207,6 +203,14 @@ int config_persist_load(persisted_config_t *config) {
             config->optimize_max_iterations = atoi(value);
         } else if (strcmp(key, "optimize_min_requests") == 0) {
             config->optimize_min_requests = atoi(value);
+        } else if (strcmp(key, "optimize_client_range") == 0) {
+            set_string_field(&config->optimize_client_range, value);
+        } else if (strcmp(key, "optimize_thread_range") == 0) {
+            set_string_field(&config->optimize_thread_range, value);
+        } else if (strcmp(key, "optimize_ef_search_range") == 0) {
+            set_string_field(&config->optimize_ef_search_range, value);
+        } else if (strcmp(key, "optimize_pipeline_range") == 0) {
+            set_string_field(&config->optimize_pipeline_range, value);
         } else if (strcmp(key, "tls_cert") == 0) {
             set_string_field(&config->tls_cert, value);
         } else if (strcmp(key, "tls_key") == 0) {
@@ -276,9 +280,6 @@ int config_persist_save(const persisted_config_t *config) {
     if (config->precision > 0) {
         fprintf(fp, "precision %d\n", config->precision);
     }
-    if (config->cluster_mode) {
-        fprintf(fp, "cluster_mode %d\n", config->cluster_mode);
-    }
     if (config->resp3) {
         fprintf(fp, "resp3 %d\n", config->resp3);
     }
@@ -340,9 +341,6 @@ int config_persist_save(const persisted_config_t *config) {
     }
 
     /* Optimizer parameters */
-    if (config->optimize_enabled) {
-        fprintf(fp, "optimize_enabled %d\n", config->optimize_enabled);
-    }
     if (config->optimize_objective) {
         fprintf(fp, "optimize_objective %s\n", config->optimize_objective);
     }
@@ -354,6 +352,18 @@ int config_persist_save(const persisted_config_t *config) {
     }
     if (config->optimize_min_requests > 0) {
         fprintf(fp, "optimize_min_requests %d\n", config->optimize_min_requests);
+    }
+    if (config->optimize_client_range) {
+        fprintf(fp, "optimize_client_range %s\n", config->optimize_client_range);
+    }
+    if (config->optimize_thread_range) {
+        fprintf(fp, "optimize_thread_range %s\n", config->optimize_thread_range);
+    }
+    if (config->optimize_ef_search_range) {
+        fprintf(fp, "optimize_ef_search_range %s\n", config->optimize_ef_search_range);
+    }
+    if (config->optimize_pipeline_range) {
+        fprintf(fp, "optimize_pipeline_range %s\n", config->optimize_pipeline_range);
     }
 
     /* Authentication parameters */
@@ -425,7 +435,6 @@ void config_persist_show(const persisted_config_t *config, int verbose) {
     if (config->idlemode) printf("idlemode: %d\n", config->idlemode);
     if (config->keepalive > 0) printf("keepalive: %d\n", config->keepalive);
     if (config->precision > 0) printf("precision: %d\n", config->precision);
-    if (config->cluster_mode) printf("cluster_mode: %d\n", config->cluster_mode);
     if (config->resp3) printf("resp3: %d\n", config->resp3);
 
     /* Search parameters */
@@ -449,11 +458,14 @@ void config_persist_show(const persisted_config_t *config, int verbose) {
     if (config->use_filtered_search) printf("use_filtered_search: %d\n", config->use_filtered_search);
 
     /* Optimizer parameters */
-    if (config->optimize_enabled) printf("optimize_enabled: %d\n", config->optimize_enabled);
     if (config->optimize_objective) printf("optimize_objective: %s\n", config->optimize_objective);
     if (config->optimize_csv_file) printf("optimize_csv_file: %s\n", config->optimize_csv_file);
     if (config->optimize_max_iterations > 0) printf("optimize_max_iterations: %d\n", config->optimize_max_iterations);
     if (config->optimize_min_requests > 0) printf("optimize_min_requests: %d\n", config->optimize_min_requests);
+    if (config->optimize_client_range) printf("optimize_client_range: %s\n", config->optimize_client_range);
+    if (config->optimize_thread_range) printf("optimize_thread_range: %s\n", config->optimize_thread_range);
+    if (config->optimize_ef_search_range) printf("optimize_ef_search_range: %s\n", config->optimize_ef_search_range);
+    if (config->optimize_pipeline_range) printf("optimize_pipeline_range: %s\n", config->optimize_pipeline_range);
 
     if (verbose) {
         if (config->tls_cert) printf("tls_cert: %s\n", config->tls_cert);
@@ -510,7 +522,6 @@ int config_persist_merge(persisted_config_t *base, const persisted_config_t *ove
     if (override->idlemode) base->idlemode = override->idlemode;
     if (override->keepalive > 0) base->keepalive = override->keepalive;
     if (override->precision > 0) base->precision = override->precision;
-    if (override->cluster_mode) base->cluster_mode = override->cluster_mode;
     if (override->resp3) base->resp3 = override->resp3;
 
     /* Search parameters */
@@ -534,11 +545,14 @@ int config_persist_merge(persisted_config_t *base, const persisted_config_t *ove
     if (override->use_filtered_search) base->use_filtered_search = override->use_filtered_search;
 
     /* Optimizer parameters */
-    if (override->optimize_enabled) base->optimize_enabled = override->optimize_enabled;
     if (override->optimize_objective) set_string_field(&base->optimize_objective, override->optimize_objective);
     if (override->optimize_csv_file) set_string_field(&base->optimize_csv_file, override->optimize_csv_file);
     if (override->optimize_max_iterations > 0) base->optimize_max_iterations = override->optimize_max_iterations;
     if (override->optimize_min_requests > 0) base->optimize_min_requests = override->optimize_min_requests;
+    if (override->optimize_client_range) set_string_field(&base->optimize_client_range, override->optimize_client_range);
+    if (override->optimize_thread_range) set_string_field(&base->optimize_thread_range, override->optimize_thread_range);
+    if (override->optimize_ef_search_range) set_string_field(&base->optimize_ef_search_range, override->optimize_ef_search_range);
+    if (override->optimize_pipeline_range) set_string_field(&base->optimize_pipeline_range, override->optimize_pipeline_range);
 
     /* Authentication parameters */
     if (override->auth) set_string_field(&base->auth, override->auth);

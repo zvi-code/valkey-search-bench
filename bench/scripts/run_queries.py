@@ -26,7 +26,6 @@ Example usage:
 import sys
 import argparse
 from pathlib import Path
-import struct
 import os
 
 # Add parent directory to path for imports
@@ -37,118 +36,11 @@ from wrappers import (
     BenchmarkConfig,
     BenchmarkError,
     BinaryNotFoundError,
+    find_dataset_path,
+    detect_dataset_info,
+    generate_index_name,
+    generate_search_prefix,
 )
-
-
-def find_dataset_path(dataset_name: str) -> str:
-    """Find dataset file path from dataset name.
-    
-    Looks for dataset in standard locations:
-    1. datasets/ directory (relative to script)
-    2. BENCHMARK_HOME/datasets/ if BENCHMARK_HOME is set
-    3. Current directory
-    
-    Args:
-        dataset_name: Dataset name (e.g., "openai-large-5m", "sift-128")
-    
-    Returns:
-        Full path to dataset file
-    
-    Raises:
-        BenchmarkError: If dataset file not found
-    """
-    # Try with and without .bin extension
-    candidates = [dataset_name]
-    if not dataset_name.endswith('.bin'):
-        candidates.append(f"{dataset_name}.bin")
-    
-    # Standard search locations
-    script_dir = Path(__file__).parent.parent.parent  # Go up to project root
-    search_paths = [
-        script_dir / "datasets",
-    ]
-    
-    # Add BENCHMARK_HOME if set
-    if benchmark_home := os.getenv("BENCHMARK_HOME"):
-        search_paths.insert(0, Path(benchmark_home) / "datasets")
-    
-    # Also try current directory
-    search_paths.append(Path.cwd())
-    
-    # Search for dataset file
-    for search_dir in search_paths:
-        for candidate in candidates:
-            dataset_path = search_dir / candidate
-            if dataset_path.exists():
-                return str(dataset_path)
-    
-    # If not found, provide helpful error
-    raise BenchmarkError(
-        f"Dataset '{dataset_name}' not found. Searched in:\n" +
-        "\n".join(f"  - {p}" for p in search_paths) +
-        f"\n\nTried filenames: {', '.join(candidates)}"
-    )
-
-
-def detect_dataset_info(dataset_path: str) -> tuple:
-    """Detect dataset dimensions and size from binary file.
-    
-    Binary format (valkey-search-benchmark custom format):
-        Header (4KB):
-            uint32_t magic (0xDECDB001)
-            uint32_t version
-            char dataset_name[256]
-            uint8_t distance_metric
-            uint8_t dtype
-            uint8_t has_metadata
-            uint8_t padding
-            uint32_t dim
-            uint64_t num_vectors
-            uint64_t num_queries
-            ...
-    
-    Returns:
-        (num_vectors, dimensions)
-    """
-    try:
-        with open(dataset_path, 'rb') as f:
-            # Read magic number
-            magic = struct.unpack('I', f.read(4))[0]
-            
-            if magic != 0xDECDB001:
-                raise ValueError(f"Invalid magic number: 0x{magic:08X} (expected 0xDECDB001)")
-            
-            # Read version
-            version = struct.unpack('I', f.read(4))[0]
-            
-            # Skip dataset_name[256]
-            f.seek(256, 1)
-            
-            # Skip distance_metric, dtype, has_metadata, padding (4 bytes total)
-            f.seek(4, 1)
-            
-            # Read dim (uint32_t)
-            dimensions = struct.unpack('I', f.read(4))[0]
-            
-            # Read num_vectors (uint64_t)
-            num_vectors = struct.unpack('Q', f.read(8))[0]
-            
-        return num_vectors, dimensions
-        
-    except Exception as e:
-        # Fallback - try to infer from filename
-        filename = Path(dataset_path).stem
-        
-        # Common patterns: sift-128, glove-50, openai-large-5m, etc.
-        # Try to extract dimension from filename
-        if '-' in filename:
-            parts = filename.split('-')
-            for part in parts:
-                if part.isdigit():
-                    dimensions = int(part)
-                    return None, dimensions
-        
-        raise BenchmarkError(f"Could not detect dataset info: {e}")
 
 
 def estimate_initial_config(num_vectors: int, dimensions: int):
@@ -297,7 +189,7 @@ The script uses valkey-benchmark's native optimizer to:
     # Step 1: Detect dataset properties and generate index name + prefix
     print("📊 Detecting dataset properties...")
     try:
-        num_vectors, dimensions = detect_dataset_info(dataset_path)
+        dimensions, num_vectors = detect_dataset_info(dataset_path)
         if num_vectors:
             print(f"   Vectors:    {num_vectors:,}")
         print(f"   Dimensions: {dimensions}")
@@ -324,13 +216,7 @@ The script uses valkey-benchmark's native optimizer to:
         print(f"   Index name:    {index_name}")
         print(f"   Search prefix: {search_prefix}")
     except BenchmarkError as e:
-        print(f"   Warning: {e}")
-        print(f"   Continuing with default configuration...")
-        dimensions = 1536
-        num_vectors = None
-        index_name = f"{dataset_name}-1536-100"  # Fallback
-        short_name = dataset_name.replace('-', '').replace('_', '')
-        search_prefix = f"zvec_{short_name}:"
+        assert False, f"Error reading dataset: {e}"
     
     # Step 2: Estimate initial configuration for optimizer
     print(f"\n🔧 Setting up optimizer configuration...")

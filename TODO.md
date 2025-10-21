@@ -5,17 +5,17 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 ## Loader Enhancements
 
 ### 1. Ground Truth Query Vector Insertion
-**Status:** Planned  
+**Status:** Planned
 **Description:** Add option to insert all ground truth query vectors into the index.  
 **Benefits:** Enables more comprehensive testing and validation scenarios.
 
 ### 2. Index Configuration Verification
-**Status:** Planned  
+**Status:** Planned
 **Description:** Verify index configuration for existing indexes. If the configuration doesn't match what's requested, provide option to clean/recreate the index.  
 **Benefits:** Prevents test failures due to configuration mismatches and ensures consistency.
 
 ### 3. Ground Truth Generation via Flat Search
-**Status:** Planned  
+**Status:** Planned
 **Description:** Generate ground truth vectors using flat search for existing indexes.  
 **Benefits:** Allows creation of ground truth data without external dependencies.
 
@@ -25,7 +25,7 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Benefits:** More flexible testing scenarios without manual server configuration changes. Enables automated testing of different server configurations.
 
 ### 5. Test Stage and Tag Reporting
-**Status:** Planned  
+**Status:** Planned
 **Description:** Report `test stage` and `test tag` for external tools to collect profiling data.  
 **Benefits:** Better integration with profiling and monitoring tools; easier correlation of metrics with test phases.
 
@@ -39,17 +39,17 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Benefits:** Reduces repetitive command-line arguments and improves user experience.
 
 ### 7. Expiry Support
-**Status:** Planned  
+**Status:** Planned
 **Description:** Add ability to set TTL/expiry on inserted vectors.  
 **Benefits:** Test scenarios involving data expiration and cache eviction.
 
 ### 8. Numeric and Tag Filters
-**Status:** Planned  
+**Status:** In Progress
 **Description:** Add ability to set numeric and tag filters for queries.  
 **Benefits:** Test filtered search scenarios and mixed workloads.
 
 ### 9. Variable Tag Lengths
-**Status:** Planned  
+**Status:** In Progress
 **Description:** Add ability to set different tag lengths for testing.  
 **Benefits:** Test impact of metadata size on performance.
 
@@ -59,12 +59,12 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Benefits:** Test dynamic scaling scenarios and eliminate warmup overhead between tests.
 
 ### 11. Valkey Logic Encapsulation
-**Status:** Planned  
+**Status:** Started
 **Description:** Encapsulate Valkey-specific logic to prepare for future extensions to other vector databases.  
 **Benefits:** Better code organization and easier support for multiple backends.
 
 ### 17. Dataset Extension
-**Status:** Planned  
+**Status:** Started
 **Description:** Extend dataset by shifting existing dataset by the diameter of current dataset.  
 **Note:** Will not work for cosine similarity.  
 **Benefits:** Create larger synthetic datasets from existing ones.
@@ -75,7 +75,7 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Benefits:** Improved usability and integration with external tools.
 
 ## 19. Allow Range based address specification
-**Status:** Planned  
+**Status:** Started
 **Description:** Allow specifying a range of addresses not starting from 0.  
 **Benefits:** More flexible data addressing schemes.
 
@@ -90,12 +90,12 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Benefits:** More realistic testing scenarios with complex data structures.
 
 ### 22. Extend support of delete operations
-**Status:** Planned  
+**Status:** Started
 **Description:** Extend delete operations to support deleting by range, by % or by capacity target.  
 **Benefits:** More flexible data management scenarios.
 
 ### 23. Support for mixed workloads + hybrid search
-**Status:** Planned  
+**Status:** Started
 **Description:** Add support for mixed workloads involving different operation types (e.g., search, insert, delete) in a single benchmark run. This will also support having non-search operations running in the background while search operations are being benchmarked.
 **Benefits:** More realistic testing scenarios that mimic production workloads.
 
@@ -111,7 +111,7 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Benefits:** Enables testing of distributed scenarios and cluster interactions.
 
 ### 26. Collect latency per-node both in CME and when using replicas in CMD
-**Status:** Planned  
+**Status:** Started
 **Description:** Extend the benchmark tool to collect and report latency metrics for each individual node in a cluster environment, both in Cluster Mode Enabled (CME) and when using replicas in Cluster Mode Disabled (CMD).  
 **Benefits:** Provides deeper insights into performance variations across different nodes, helping identify bottlenecks and optimize cluster configurations.
 
@@ -120,8 +120,13 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Description:** Improve the benchmark tool's handling of out-of-sync replicas by implementing detection mechanisms and appropriate response strategies. This may include skipping lagging replicas during benchmarks or providing detailed reporting on their status.  
 **Benefits:** Ensures more accurate benchmark results by avoiding the influence of lagging replicas and providing clearer insights into cluster health.
 
-### 28. Add additional search results quality metrics
-**Status:** Planned  
+### 28. Implement vec-scan-q-verify
+**Status:** Planned
+**Description:** Implement a new operation type `vec-scan-q-verify` that performs vector scan queries and verifies the results against self. This can be used for datasets without ground truth. We can generate "statistical" recall calculations when looking on aggregate queries. How many top-k (k=1) we got out on N queries.
+**Benefits:** Some sanity test of quality, without the cost of ground truth generation.
+
+### 29. Add additional search results quality metrics
+**Status:** Planned
 **Description:** Implement additional metrics to evaluate the quality of search results beyond simple recall. These metrics provide deeper insights into ranking quality and relevance ordering:
 
 #### 🧮 1. **Mean Average Precision (MAP)**
@@ -233,12 +238,12 @@ Plotting this as a curve helps visualize how far the true neighbors are distribu
 **Benefits:** Automated profiling workflow with properly labeled data.
 
 ### 5. Memory Saturation Testing
-**Status:** Planned  
+**Status:** Planned
 **Description:** Wrapper for testing with 100% memory utilization.  
 **Benefits:** Test behavior under memory pressure and eviction scenarios.
 
 ### 6. Payload Impact Testing
-**Status:** Planned  
+**Status:** Planned
 **Description:** Add wrapper to test the impact of different payload sizes and types.  
 **Benefits:** Understand memory and performance tradeoffs with different metadata configurations.
 

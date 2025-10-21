@@ -34,8 +34,6 @@ if [ -z "${HOST:-}" ]; then
     exit 1
 fi
 # Configuration
-# HOST="${HOST:-ec-search-zvi-memdb-no-tls.ajfdds.clustercfg.memorydb-devo.eu-west-1.amazonaws.com}"
-# HOST="${HOST:-ec-search-zvi-ec-1shard-no-tls-0001-001.ajfdds.0001.euw1devo.cache.amazonaws.com}"
 BINARY_DIR="${BENCHMARK_HOME}/datasets"
 BENCHN="${BENCHMARK_HOME}/build-debug/bin/valkey-benchmark"
 CLI="${VALKEY_CLI_DIR}/valkey-cli"
@@ -245,13 +243,13 @@ insert_dataset() {
     # Insert dataset (ground truth phase)
     echo "Inserting vectors (this may take several minutes)..."
     local insertion_output=$(mktemp)
-    echo "running command $BENCHN -h $HOST $CLUSTER_MODE --rfr no --dataset $binary_file -t vec-ground-truth --search --vector-dim $dims --search-name $index_name --search-prefix $prefix -n $expected_vectors -c 10 --clean"
+    echo "running command $BENCHN -h $HOST $CLUSTER_MODE --rfr no --dataset $binary_file -t vec-load --search --vector-dim $dims --search-name $index_name --search-prefix $prefix -n $expected_vectors -c 10 --clean"
     
     # Run without tee to allow progress bars to work correctly
     # Save output to file, but let progress bars display in real-time
     if ! $BENCHN -h "$HOST" $CLUSTER_MODE --rfr no \
         --dataset "$binary_file" \
-        -t vec-ground-truth --search --vector-dim "$dims" \
+        -t vec-load --search --vector-dim "$dims" \
         --search-name "$index_name" --search-prefix "$prefix" \
         -n "$expected_vectors" -c 10 --clean > "$insertion_output" 2>&1; then
 

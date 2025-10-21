@@ -19,7 +19,7 @@ cd build
 ./bin/valkey-benchmark \
   -h localhost --cluster --rfr no \
   --dataset cohere-medium-1m.bin \
-  -t vec-ground-truth \
+  -t vec-load \
   --search --vector-dim 768 \
   --search-name cohere_1m --search-prefix zvec_: \
   -n 1000000 -c 10 --clean
@@ -85,14 +85,14 @@ cd build
 
 ## Benchmark Phases
 
-### Phase 1: Ground Truth Loading (vec-ground-truth)
+### Phase 1: Ground Truth Loading (vec-load)
 
 Loads all training vectors into Valkey and creates the index.
 
 ```bash
 ./bin/valkey-benchmark \
   --dataset sift-128.bin \
-  -t vec-ground-truth \
+  -t vec-load \
   --search --vector-dim 128 \
   --search-name sift_index \
   --search-prefix vec_: \

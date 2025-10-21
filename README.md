@@ -1,11 +1,12 @@
-# Valkey Vector Benchmark
+# Valkey Vector Benchmark 
+[This is still a work in progress. Feedback and contributions are welcome!]
 
-A standalone benchmarking toolkit for evaluating vector search performance in Valkey and Redis clusters, with support for standard vectordb-bench datasets and comprehensive recall validation.
+A standalone benchmarking toolkit for evaluating vector search (and other valkey workloads) performance in Valkey and Redis clusters, with support for standard vectordb-bench datasets and comprehensive recall validation.
 
 ## Overview
 
 This package extracts the vector search benchmarking capabilities from the Valkey project into a standalone tool. It provides:
-
+s
 - **Dataset Pipeline**: Download, convert, and prepare vectordb-bench datasets (COHERE, OPENAI, SIFT, GIST, LAION, BIGANN)
 - **Binary Format**: Custom 4KB-aligned binary format with precomputed ground truth for recall validation
 - **Cluster Support**: Parallel cluster scanning with vector ID to cluster tag mapping
@@ -85,7 +86,7 @@ python prep_datasets/convert_parquet_to_hdf5.py \
 # Phase 1: Insert ground truth (all vectors)
 ./bin/valkey-benchmark -h localhost --cluster --rfr no \
   --dataset cohere-medium-1m.bin \
-  -t vec-ground-truth --search --vector-dim 768 \
+  -t vec-load --search --vector-dim 768 \
   --search-name cohere_1m --search-prefix zvec_: \
   -n 1000000 -c 10 --clean
 
@@ -559,18 +560,14 @@ make valkey-benchmark
 
 ## Performance Expectations
 
-| Scale | Vectors | Recall | QPS  | Latency | Dataset       |
-|-------|---------|--------|------|---------|---------------|
-| Small | 100K    | 95%+   | 2000+| <5ms    | COHERE-100K   |
-| Medium| 1M      | 90%+   | 1500+| <8ms    | COHERE-1M     |
-| Large | 5-10M   | 85%+   | 700+ | <15ms   | OPENAI-5M     |
+TBD - Performance benchmarks will be added soon.
 
 ## Contributing
 
 This is a standalone extraction from the Valkey project. For contributions:
 
 1. Focus on benchmarking capabilities only
-2. Maintain compatibility with vectordb-bench datasets
+2. Maintain compatibility with existing datasets
 3. Keep documentation synchronized with code changes
 4. Test with multiple datasets before committing
 

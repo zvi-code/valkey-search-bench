@@ -433,6 +433,10 @@ static struct config {
     sds optimize_csv_file;        /* CSV output file for optimization results */
     int optimize_max_iterations;  /* Max optimization iterations */
     int optimize_min_requests;    /* Min requests per benchmark run */
+    sds optimize_client_range;    /* Client count range: "min:max" */
+    sds optimize_thread_range;    /* Thread count range: "min:max" */
+    sds optimize_ef_search_range; /* ef_search range: "min:max" */
+    sds optimize_pipeline_range;  /* Pipeline range: "min:max" */
 
     /* Config persistence flags */
     int save_config;              /* Save configuration after successful run */
@@ -520,24 +524,6 @@ static void updateRecallStatsExt(float recall) {
     updateRecallStatsInt(&dataset_recall_stats_ext, recall);
 }
 
-/* Reset statistics for clean benchmark run (used by optimizer) */
-static void resetBenchmarkStats(void) {
-    /* Reset request counters */
-    config.totlatency = 0;
-    
-    /* Reset recall statistics */
-    memset(&dataset_recall_stats, 0, sizeof(recallStats));
-    memset(&dataset_recall_stats_ext, 0, sizeof(recallStats));
-    dataset_recall_stats.min_recall = 1.0;
-    dataset_recall_stats_ext.min_recall = 1.0;
-    
-    /* Reset dataset counters if in dataset mode */
-    if (config.use_dataset) {
-        atomic_store_explicit(&config.dataset_prefill_counter, 0, memory_order_relaxed);
-        atomic_store_explicit(&config.dataset_query_counter, 0, memory_order_relaxed);
-    }
-}
-
 /* Parse metric name string to metric_t enum */
 static metric_t parseMetricName(const char *name) {
     if (!strcasecmp(name, "qps")) return METRIC_QPS;
@@ -621,6 +607,49 @@ static void parseOptimizerConstraint(optimizer_t *opt, const char *constraint_st
     optimizer_add_constraint(opt, metric, type, threshold);
     
     free(str_copy);
+}
+
+/* Parse range string "min:max" and return min and max values */
+/* Returns 1 on success, 0 on failure. If parsing fails, uses default values. */
+static int parseOptimizeRange(const char *range_str, int *min_val, int *max_val, int default_min, int default_max) {
+    if (!range_str || !min_val || !max_val) {
+        *min_val = default_min;
+        *max_val = default_max;
+        return 0;
+    }
+    
+    char *str_copy = strdup(range_str);
+    char *colon = strchr(str_copy, ':');
+    
+    if (!colon) {
+        fprintf(stderr, "Warning: Invalid range format '%s', expected 'min:max'. Using defaults %d:%d\n",
+                range_str, default_min, default_max);
+        *min_val = default_min;
+        *max_val = default_max;
+        free(str_copy);
+        return 0;
+    }
+    
+    *colon = '\0';
+    const char *min_str = str_copy;
+    const char *max_str = colon + 1;
+    
+    int parsed_min = atoi(min_str);
+    int parsed_max = atoi(max_str);
+    
+    if (parsed_min >= parsed_max) {
+        fprintf(stderr, "Warning: Invalid range '%s', min must be less than max. Using defaults %d:%d\n",
+                range_str, default_min, default_max);
+        *min_val = default_min;
+        *max_val = default_max;
+        free(str_copy);
+        return 0;
+    }
+    
+    *min_val = parsed_min;
+    *max_val = parsed_max;
+    free(str_copy);
+    return 1;
 }
 
 /* Collect current metrics for optimizer */
@@ -725,7 +754,6 @@ static int encode_vector_key_fixed(char *key_out, size_t key_out_size,
     size_t prefix_len = strlen(config.search.prefix);
     size_t cluster_tag_len = config.cluster_mode? PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len : 0;
     size_t key_write_len = prefix_len + cluster_tag_len + 1 + PLACEHOLDERS[DATASET_KEY_PLACEHOLDER_INDEX].len; // +1 for ':' +12 for vector_id
-    // size_t vector_id_len = PLACEHOLDERS[DATASET_KEY_PLACEHOLDER_INDEX].len; // Fixed width for vector ID
     int ret;
     if (prefix) {
         memcpy(key_out, prefix, prefix_len);
@@ -742,12 +770,7 @@ static int encode_vector_key_fixed(char *key_out, size_t key_out_size,
     assert(*key_out == ':'); // Separator
     key_out++; // Skip ':'
     key_write_len--;
-    // char format[32];
-    // debug print parameters
-    // printf("DEBUG: prefix_len=%zu, cluster_tag_len=%zu, vector_id_len=%zu, vector_id=%lu\n",
-    //        prefix_len, cluster_tag_len, vector_id_len, vector_id);
-    // Create format string for fixed width vector ID
-    // snprintf(format, sizeof(format), "%%0%zulu", vector_id_len);
+    // Vector ID placeholder length check
     assert(12 == PLACEHOLDERS[DATASET_KEY_PLACEHOLDER_INDEX].len);
     // Encode vector ID with fixed width
     ret = snprintf(key_out, key_out_size+1, "%012lu",
@@ -1859,9 +1882,7 @@ static void createDefaultSearchIndexes(void) {
            config.cluster_mode, config.search.name, config.conn_info.hostip, config.conn_info.hostport);
     fflush(stdout);
     valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
-    // if (ctx == NULL) {
-    //     fprintf(stderr, "No existing connection context, creating new\n");
-    //     ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
+        
     if (ctx == NULL) {
         fprintf(stderr, "Failed to connect to server for index creation\n");
         fflush(stderr);
@@ -3112,6 +3133,7 @@ static void startBenchmarkThreads(void) {
 static clusterSnapshot* last_search_info = NULL;
 static clusterSnapshot* last_ftinfo = NULL;
 static clusterSnapshot* last_info_all = NULL;
+static mstime_t snapshot_time = 0;
 /* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
  * seqlen is the number of commands included in cmd. */
 static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen) {
@@ -3122,6 +3144,11 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     config.requests_finished = 0;
     config.previous_requests_finished = 0;
     config.last_printed_bytes = 0;
+        /* Reset request counters */
+    config.totlatency = 0;
+    
+    /* Reset recall statistics */
+    initRecallStats();
     hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
              CONFIG_LATENCY_HISTOGRAM_MAX_VALUE,         // Maximum value
              config.precision,                           // Number of significant figures
@@ -3154,8 +3181,8 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     int thread_id = config.num_threads > 0 ? 0 : -1;
     c = createClient(cmd, len, seqlen, NULL, thread_id);
     createMissingClients(c);
-
-    config.start = mstime();
+    
+    config.start = mstime();    
     if (!config.num_threads)
         aeMain(config.el);
     else
@@ -3183,6 +3210,7 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
         last_search_info = after_search_info;
         last_ftinfo = after_ftinfo;
         last_info_all = after_info_all;
+        snapshot_time = mstime();
         printf_results("Search memory usage: before=%lld after=%lld (diff=%+lld), reclaimable: before=%lld after=%lld (diff=%+lld)\n",
                search_memory, after_search_memory, after_search_memory - search_memory,
                search_reclaimable, after_search_reclaimable, after_search_reclaimable - search_reclaimable);
@@ -4189,7 +4217,8 @@ int parseOptions(int argc, char **argv) {
     int exit_status = 1;
     char *tls_usage;
     char *rdma_usage;
-    char *search_usage;
+    char *search_usage_part1;
+    char *search_usage_part2;
     char *search_examples;
     for (i = 1; i < argc; i++) {
         lastarg = (i == (argc - 1));
@@ -4365,6 +4394,22 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--optimize-min-requests")) {
             if (lastarg) goto invalid;
             config.optimize_min_requests = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--optimize-client-range")) {
+            if (lastarg) goto invalid;
+            if (config.optimize_client_range) sdsfree(config.optimize_client_range);
+            config.optimize_client_range = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--optimize-thread-range")) {
+            if (lastarg) goto invalid;
+            if (config.optimize_thread_range) sdsfree(config.optimize_thread_range);
+            config.optimize_thread_range = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--optimize-ef-search-range")) {
+            if (lastarg) goto invalid;
+            if (config.optimize_ef_search_range) sdsfree(config.optimize_ef_search_range);
+            config.optimize_ef_search_range = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--optimize-pipeline-range")) {
+            if (lastarg) goto invalid;
+            if (config.optimize_pipeline_range) sdsfree(config.optimize_pipeline_range);
+            config.optimize_pipeline_range = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i], "--runtime-config")) {
             if (lastarg) goto invalid;
             if (config.runtime_config_file) sdsfree(config.runtime_config_file);
@@ -4567,7 +4612,7 @@ usage:
         "       --search-tags 'electronics:40,clothing:30,food:30' \\\n"
         "       -t vec-insert -n 10000\n\n";
 
-    search_usage = 
+    search_usage_part1 = 
          " --search           Enable search indexes for vec-insert, vec-query, vec-del, and\n"
         "                    vec-scan-q-verify tests. Creates a vector index when starting benchmarks.\n"
         "                    Available vector tests:\n"
@@ -4605,7 +4650,9 @@ usage:
         "                    Dataset must be in binary format (.bin extension).\n"
         " --dataset-path <path> Specify the full path to the dataset file.\n"
         " --filtered          Enable metadata filtering for vector search (requires dataset with metadata).\n"
-        "\n"
+        "\n";
+    
+    search_usage_part2 = 
         "Optimizer Options:\n"
         " --optimize         Enable adaptive load optimization. Automatically adjusts\n"
         "                    benchmark parameters to achieve optimization goals.\n"
@@ -4625,6 +4672,18 @@ usage:
         "                    Maximum number of optimization iterations (default 50).\n"
         " --optimize-min-requests <num>\n"
         "                    Minimum requests per benchmark run during optimization (default 1000).\n"
+        " --optimize-client-range <min:max>\n"
+        "                    Range for number of parallel clients (connections) to test.\n"
+        "                    Example: '20:400' (default: '1:1500')\n"
+        " --optimize-thread-range <min:max>\n"
+        "                    Range for number of threads to test.\n"
+        "                    Example: '4:10' (default: '0:16')\n"
+        " --optimize-ef-search-range <min:max>\n"
+        "                    Range for ef_search parameter in HNSW queries.\n"
+        "                    Example: '50:300' (default: '20:500')\n"
+        " --optimize-pipeline-range <min:max>\n"
+        "                    Range for pipeline size (number of commands per batch).\n"
+        "                    Example: '10:100' (default: '1:1000')\n"
         "\n"
         "Runtime Configuration Options:\n"
         " --runtime-config <file>\n"
@@ -4632,7 +4691,7 @@ usage:
         "                    Configurations are applied to all cluster nodes.\n"
         " --restore-config   Restore original server configurations after benchmark completes.\n";
     printf(
-        "%s%s%s%s%s%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
+        "%s%s%s%s%s%s%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
         "Usage: valkey-benchmark [OPTIONS] [--] [COMMAND ARGS...]\n\n"
         "Simulates sending commands using multiple clients. The utility provides a\n"
         "default set of tests. You can run a subset of the tests using the -t option or\n"
@@ -4725,7 +4784,8 @@ usage:
         " --num-keys-in-fcall <num>\n"
         "                    Sets the number of keys passed to FCALL command when running\n"
         "                    the 'fcall' test. (default 1)\n",
-        search_usage,
+        search_usage_part1,
+        search_usage_part2,
         tls_usage,
         rdma_usage,        
         " --mptcp            Enable an MPTCP connection.\n"
@@ -4973,7 +5033,6 @@ int main(int argc, char **argv) {
         if (saved_config.idlemode) config.idlemode = saved_config.idlemode;
         if (saved_config.keepalive > 0) config.keepalive = saved_config.keepalive;
         if (saved_config.precision > 0) config.precision = saved_config.precision;
-        if (saved_config.cluster_mode) config.cluster_mode = saved_config.cluster_mode;
         if (saved_config.resp3) config.resp3 = saved_config.resp3;
 
         /* Apply search parameters */
@@ -4995,7 +5054,6 @@ int main(int argc, char **argv) {
         if (saved_config.use_filtered_search) config.use_filtered_search = saved_config.use_filtered_search;
 
         /* Apply optimizer parameters */
-        if (saved_config.optimize_enabled) config.optimize_enabled = saved_config.optimize_enabled;
         if (saved_config.optimize_objective) config.optimize_objective = sdsnew(saved_config.optimize_objective);
         if (saved_config.optimize_csv_file) config.optimize_csv_file = sdsnew(saved_config.optimize_csv_file);
         if (saved_config.optimize_max_iterations > 0) config.optimize_max_iterations = saved_config.optimize_max_iterations;
@@ -5037,7 +5095,6 @@ int main(int argc, char **argv) {
         config_to_save.idlemode = config.idlemode;
         config_to_save.keepalive = config.keepalive;
         config_to_save.precision = config.precision;
-        config_to_save.cluster_mode = config.cluster_mode;
         config_to_save.resp3 = config.resp3;
 
         /* Search parameters */
@@ -5059,7 +5116,6 @@ int main(int argc, char **argv) {
         config_to_save.use_filtered_search = config.use_filtered_search;
 
         /* Optimizer parameters */
-        config_to_save.optimize_enabled = config.optimize_enabled;
         if (config.optimize_objective) config_to_save.optimize_objective = config.optimize_objective;
         if (config.optimize_csv_file) config_to_save.optimize_csv_file = config.optimize_csv_file;
         config_to_save.optimize_max_iterations = config.optimize_max_iterations;
@@ -5456,10 +5512,20 @@ int main(int argc, char **argv) {
          * MIXED group: ef_search (affects recall AND latency/throughput tradeoff)
          * THROUGHPUT group: clients, threads, pipeline (affect QPS/latency, minimal recall impact)
          */
-        optimizer_add_param_grouped(config.optimizer, "clients", 1, 1500, 5, config.numclients, PARAM_GROUP_THROUGHPUT);
-        optimizer_add_param_grouped(config.optimizer, "threads", 0, 16, 1, config.num_threads, PARAM_GROUP_THROUGHPUT);
-        // optimizer_add_param_grouped(config.optimizer, "pipeline", 1, 1000, 1, config.pipeline, PARAM_GROUP_THROUGHPUT);
-        optimizer_add_param_grouped(config.optimizer, "ef_search", 20, 500, 1, config.search.ef_search, PARAM_GROUP_MIXED);
+        
+        /* Parse custom ranges or use defaults */
+        int client_min, client_max, thread_min, thread_max;
+        int ef_search_min, ef_search_max, pipeline_min, pipeline_max;
+        
+        parseOptimizeRange(config.optimize_client_range, &client_min, &client_max, 1, 1500);
+        parseOptimizeRange(config.optimize_thread_range, &thread_min, &thread_max, 0, 16);
+        parseOptimizeRange(config.optimize_ef_search_range, &ef_search_min, &ef_search_max, 20, 500);
+        parseOptimizeRange(config.optimize_pipeline_range, &pipeline_min, &pipeline_max, 1, 1000);
+        
+        optimizer_add_param_grouped(config.optimizer, "clients", client_min, client_max, 5, config.numclients, PARAM_GROUP_THROUGHPUT);
+        optimizer_add_param_grouped(config.optimizer, "threads", thread_min, thread_max, 1, config.num_threads, PARAM_GROUP_THROUGHPUT);
+        // optimizer_add_param_grouped(config.optimizer, "pipeline", pipeline_min, pipeline_max, 1, config.pipeline, PARAM_GROUP_THROUGHPUT);
+        optimizer_add_param_grouped(config.optimizer, "ef_search", ef_search_min, ef_search_max, 1, config.search.ef_search, PARAM_GROUP_MIXED);
         
         /* Add RPS as constraint-only parameter if specified */
         if (config.rps > 0) {
@@ -5503,14 +5569,25 @@ int main(int argc, char **argv) {
         
         status_t opt_status = STATUS_OK;
         int iteration = 0;
+        char *cmd_opt;
+        int len_opt;
+        /* Run the benchmark (only vec-query for now) */
+        assert(config.use_search && test_is_selected("vec-query"));
+        size_t keyspacelen_before = config.keyspacelen;
+        if (config.use_dataset) {
+            config.keyspacelen = (int)config.dataset_num_queries;
+        }
+        len_opt = createSearchCmdTemplate(&cmd_opt);
         
+        config.keyspacelen = keyspacelen_before;
+        // config.optimize_max_iterations = 10;
         /* Optimization loop */
         while (opt_status != STATUS_CONVERGED && iteration < config.optimize_max_iterations) {
             iteration++;
             
             /* Get current configuration from optimizer */
-            int opt_config[4];  /* clients, threads, ef_search (pipeline commented out) */
-            optimizer_get_current_config(config.optimizer, opt_config, 4);
+            int opt_config[3];  /* clients, threads, ef_search (pipeline commented out) */
+            optimizer_get_current_config(config.optimizer, opt_config, 3);
             
             /* Apply configuration */
             config.numclients = opt_config[0];     /* clients */
@@ -5518,31 +5595,15 @@ int main(int argc, char **argv) {
             // config.pipeline = opt_config[2];    /* pipeline (not yet enabled) */
             config.search.ef_search = opt_config[2];  /* ef_search */
             
-            /* Temporarily override requests with optimize_min_requests for faster iterations */
-            config.requests = config.optimize_min_requests;
+            // /* Temporarily override requests with optimize_min_requests for faster iterations */
+            // config.requests = config.optimize_min_requests;
             
             printf("\n--- Iteration %d ---\n", iteration);
             printf("Config: clients=%d threads=%d pipeline=%d ef_search=%d requests=%d\n",
                    config.numclients, config.num_threads, config.pipeline, config.search.ef_search, config.requests);
             
-            /* Reset statistics for clean run */
-            resetBenchmarkStats();
             
-            /* Run the benchmark (only vec-query for now) */
-            if (config.use_search && test_is_selected("vec-query")) {
-                size_t keyspacelen_before = config.keyspacelen;
-                if (config.use_dataset) {
-                    config.keyspacelen = (int)config.dataset_num_queries;
-                }
-                char *cmd_opt;
-                int len_opt = createSearchCmdTemplate(&cmd_opt);
-                benchmark("VEC-QUERY (optimizing)", cmd_opt, len_opt);
-                zfree(cmd_opt);
-                config.keyspacelen = keyspacelen_before;
-            } else {
-                fprintf(stderr, "Error: Optimizer currently requires --search and -t vec-query\n");
-                exit(1);
-            }
+            benchmark("VEC-QUERY (optimizing)", cmd_opt, len_opt);
             
             /* Collect metrics */
             double metrics[METRIC_COUNT];
@@ -5571,7 +5632,7 @@ int main(int argc, char **argv) {
         
         /* Restore original requests value */
         config.requests = original_requests;
-        
+        zfree(cmd_opt);
         /* Print final results */
         printf("\n=== Optimization Complete ===\n");
         optimizer_print_status(config.optimizer, stdout);
@@ -5600,8 +5661,6 @@ int main(int argc, char **argv) {
                 // config.pipeline = best->param_values[2];
                 config.search.ef_search = best->param_values[2];
                 
-                /* Reset statistics for final run */
-                resetBenchmarkStats();
                 
                 /* Run final benchmark with full request count */
                 if (config.use_search && test_is_selected("vec-query")) {
@@ -5707,7 +5766,7 @@ int main(int argc, char **argv) {
             zfree(cmd);
         }
         if (config.use_search) {
-            if (test_is_selected("vec-ground-truth")) {
+            if (test_is_selected("vec-load")) {
                 size_t prev_num_requests = config.requests;
                 size_t prev_keyspacelen_before = config.keyspacelen;
                 int prev_sequential_replacement = config.sequential_replacement; /* force sequential keys for ground truth ingestion */
@@ -5721,7 +5780,7 @@ int main(int argc, char **argv) {
 
                 /* Ingest ground truth vectors from reserved range */
                 len = createSearchHsetTemplate(&cmd);
-                benchmark("VEC-GROUND-TRUTH", cmd, len);
+                benchmark("VEC-LOAD", cmd, len);
                 zfree(cmd);
                 /* wait for index ingestion to complete*/
                 sds flat_index = sdsnew(config.search.name);
