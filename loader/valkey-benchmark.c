@@ -1810,10 +1810,15 @@ static int createSearchCmdTemplate(char **cmd) {
     
     /* RETURN n score_field [vector_field] */
     setArg(argv, argvlen, &argc, "RETURN", 6);
-    setArg(argv, argvlen, &argc, config.search.nocontent ? "1" : "2", 1);
-    setArg(argv, argvlen, &argc, score_field, sdslen(score_field));
     if (!config.search.nocontent) {
-        setArg(argv, argvlen, &argc, config.search.vector_field, strlen(config.search.vector_field));
+        setArg(argv, argvlen, &argc, config.search.nocontent ? "1" : "2", 1);
+        setArg(argv, argvlen, &argc, score_field, sdslen(score_field));
+        if (!config.search.nocontent) {
+            setArg(argv, argvlen, &argc, config.search.vector_field, strlen(config.search.vector_field));
+        }
+    } else {
+        // setArg(argv, argvlen, &argc, "RETURN", 6);
+        setArg(argv, argvlen, &argc, "0", 1);
     }
     /* LOCALONLY if needed */
     if (config.search.localonly) {
@@ -1892,15 +1897,15 @@ static void createDefaultSearchIndexes(void) {
     int num_indexes = 1;
     sds indexes_to_create[2] = {config.search.name, NULL};
     sds algorithms[2] = {config.search.algorithm, NULL};
-    // compare case insensitively
-    if (strcmp(config.search.algorithm, "hnsw") == 0) {
-        algorithms[1] = sdsnew("flat"); /* Fallback to FLAT if HNSW not supported */
-        indexes_to_create[1] = sdsdup(config.search.name); /* Same index name for fallback */
-        // append _flat to index name
-        indexes_to_create[1] = sdscat(indexes_to_create[1], "_flat");
-        printf("Configured HNSW index, will also create fallback FLAT index '%s'\n", indexes_to_create[1]);
-        num_indexes = 2;
-    }
+    // // compare case insensitively
+    // if (strcmp(config.search.algorithm, "hnsw") == 0) {
+    //     algorithms[1] = sdsnew("flat"); /* Fallback to FLAT if HNSW not supported */
+    //     indexes_to_create[1] = sdsdup(config.search.name); /* Same index name for fallback */
+    //     // append _flat to index name
+    //     indexes_to_create[1] = sdscat(indexes_to_create[1], "_flat");
+    //     printf("Configured HNSW index, will also create fallback FLAT index '%s'\n", indexes_to_create[1]);
+    //     num_indexes = 2;
+    // }
     for (int i = 0; i < num_indexes; i++) {        
         /* Check if any indexes exist */
         valkeyReply *list_reply = valkeyCommand(ctx, "FT._LIST");
@@ -5442,12 +5447,17 @@ int main(int argc, char **argv) {
         printf("Using search indexes for the benchmark. %s - %s\n", 
                config.engine_type == ENGINE_TYPE_MEMORYDB ? "MemoryDB" : config.engine_type == ENGINE_TYPE_ELASTICACHE_VALKEY ? "EC Valkey" : "OSS",
                cluster_mode_str);
-        sds flat_index = sdsnew(config.search.name);
-        flat_index = sdscat(flat_index, "_flat");               
-        const char* index_names[2] = {config.search.name, flat_index};
+       
+        int num_indexes = 1;
+        char* index_names[2] = {config.search.name, NULL};
+        // sds flat_index = sdsnew(config.search.name);        
+        // flat_index = sdscat(flat_index, "_flat");               
+        // const char* index_names[2] = {config.search.name, flat_index};
+        // int num_indexes = 2;
+
         createDefaultSearchIndexes();
         sleep(2); /* wait a bit before checking index status */
-        waitForIndexBackfillComplete(config.engine_type, config.selected_node_count, config.selected_nodes, config.ct, index_names, 2);
+        waitForIndexBackfillComplete(config.engine_type, config.selected_node_count, config.selected_nodes, config.ct, index_names, num_indexes);
         // wait for flat indexes
         sdsfree(flat_index);
         long long search_memory = 0;
@@ -5783,11 +5793,13 @@ int main(int argc, char **argv) {
                 benchmark("VEC-LOAD", cmd, len);
                 zfree(cmd);
                 /* wait for index ingestion to complete*/
-                sds flat_index = sdsnew(config.search.name);
-                flat_index = sdscat(flat_index, "_flat");               
-                const char* index_names[2] = {config.search.name, flat_index};
+                // sds flat_index = sdsnew(config.search.name);
+                // flat_index = sdscat(flat_index, "_flat");               
+                // const char* index_names[2] = {config.search.name, flat_index};
+                sds index_names[1] = {config.search.name};
+                int num_indexes = 1;
                 sleep(2); /* wait a bit before checking index status */
-                waitForIndexBackfillComplete(config.engine_type, config.selected_node_count, config.selected_nodes, config.ct, index_names, 2);
+                waitForIndexBackfillComplete(config.engine_type, config.selected_node_count, config.selected_nodes, config.ct, index_names, num_indexes);
                 /* Index ingestion is done */
                 config.sequential_replacement = prev_sequential_replacement; /* restore original setting */
                 config.requests = prev_num_requests; /* restore original request count */
