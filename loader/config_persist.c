@@ -34,6 +34,32 @@ static int ensure_directory(const char *path) {
     return 0;
 }
 
+/* Sanitize session ID for safe filename usage */
+static void sanitize_session_id(char *dest, size_t dest_size, const char *src) {
+    size_t j = 0;
+    for (size_t i = 0; src[i] && j < dest_size - 1; i++) {
+        char c = src[i];
+        /* Replace special characters with underscores or hyphens */
+        if ((c >= 'a' && c <= 'z') || 
+            (c >= 'A' && c <= 'Z') || 
+            (c >= '0' && c <= '9') || 
+            c == '-' || c == '_') {
+            dest[j++] = c;
+        } else if (c == '%' || c == ' ' || c == '/' || c == '\\') {
+            /* Skip or replace problematic characters */
+            if (j > 0 && dest[j-1] != '-') {
+                dest[j++] = '-';
+            }
+        }
+    }
+    dest[j] = '\0';
+    
+    /* Remove trailing dashes */
+    while (j > 0 && dest[j-1] == '-') {
+        dest[--j] = '\0';
+    }
+}
+
 int config_persist_init(void) {
     config_path[0] = '\0';
     return 0;
@@ -47,9 +73,39 @@ char *config_persist_get_path(void) {
     char local_config[1024];
     char global_config[4096];
     char *session_id = getenv("VALKEY_BENCHMARK_SESSION");
+    char auto_session_id[256] = {0};
+    char sanitized_id[256] = {0};
+
+    /* If no explicit session ID, try to auto-detect tmux session or terminal */
+    if (!session_id) {
+        /* Check for tmux session */
+        char *tmux_pane = getenv("TMUX_PANE");
+        if (tmux_pane) {
+            /* Use tmux pane ID as session identifier - sanitize it */
+            snprintf(auto_session_id, sizeof(auto_session_id), "tmux%s", tmux_pane);
+            sanitize_session_id(sanitized_id, sizeof(sanitized_id), auto_session_id);
+            session_id = sanitized_id;
+        } else {
+            /* Fall back to terminal session ID for unique identification */
+            /* Try to get the controlling terminal's session ID */
+            pid_t sid = getsid(0);
+            if (sid > 0) {
+                snprintf(auto_session_id, sizeof(auto_session_id), "term%d", sid);
+                session_id = auto_session_id;
+            } else {
+                /* Last resort: use parent process ID */
+                snprintf(auto_session_id, sizeof(auto_session_id), "term%d", getppid());
+                session_id = auto_session_id;
+            }
+        }
+    } else {
+        /* Sanitize user-provided session ID too */
+        sanitize_session_id(sanitized_id, sizeof(sanitized_id), session_id);
+        session_id = sanitized_id;
+    }
 
     /* Build config filenames based on session */
-    if (session_id) {
+    if (session_id && session_id[0] != '\0') {
         snprintf(local_config, sizeof(local_config), ".valkey-benchmark-%s.conf", session_id);
     } else {
         snprintf(local_config, sizeof(local_config), "%s", CONFIG_FILE_NAME);

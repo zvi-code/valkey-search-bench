@@ -83,6 +83,97 @@ cd build
 --csv <file>        # Save results to CSV
 ```
 
+## Session-Specific Configuration Persistence
+
+When running multiple benchmarks from different terminals or tmux sessions, configurations are automatically isolated per session to prevent conflicts.
+
+### How It Works
+
+The benchmark automatically detects your terminal or tmux session and creates unique configuration files:
+
+- **Tmux sessions**: Each tmux pane gets its own config (e.g., `config-tmux-1.conf`, `config-tmux-2.conf`)
+- **Terminal sessions**: Each terminal window gets its own config (e.g., `config-term12345.conf`)
+- **Same session**: Multiple runs in the same terminal/tmux pane share the same config file
+
+### Configuration File Locations
+
+1. **Working directory** (highest priority): `.valkey-benchmark-<session>.conf`
+2. **User global directory**: `~/.valkey-benchmark/config-<session>.conf`
+
+### Usage Examples
+
+**Example 1: Running benchmarks in different tmux panes**
+
+```bash
+# Tmux pane 1 - Testing COHERE dataset
+./bin/valkey-benchmark \
+  --dataset cohere-medium-1m.bin \
+  -t vec-query --search --vector-dim 768 \
+  --search-name cohere_1m -n 10000 -c 20
+# Config saved to: ~/.valkey-benchmark/config-tmux-1.conf
+
+# Tmux pane 2 - Testing OPENAI dataset (runs independently)
+./bin/valkey-benchmark \
+  --dataset openai-large-5m.bin \
+  -t vec-query --search --vector-dim 1536 \
+  --search-name openai_5m -n 10000 -c 40
+# Config saved to: ~/.valkey-benchmark/config-tmux-2.conf
+```
+
+**Example 2: Reusing configuration in the same session**
+
+```bash
+# Terminal 1 - First run with full parameters
+./bin/valkey-benchmark \
+  --dataset sift-128.bin \
+  -t vec-query --search --vector-dim 128 \
+  --search-name sift_index -n 10000 -c 10 --threads 4
+
+# Terminal 1 - Subsequent runs reuse saved config
+./bin/valkey-benchmark  # Automatically loads previous settings
+# Config loaded from: ~/.valkey-benchmark/config-term54321.conf
+```
+
+**Example 3: Manual session naming**
+
+If you need explicit control over session naming:
+
+```bash
+# Terminal 1 - Experiment A
+export VALKEY_BENCHMARK_SESSION=experiment_a
+./bin/valkey-benchmark --dataset foo.bin ...
+# Config: ~/.valkey-benchmark/config-experiment-a.conf
+
+# Terminal 2 - Experiment B
+export VALKEY_BENCHMARK_SESSION=experiment_b
+./bin/valkey-benchmark --dataset bar.bin ...
+# Config: ~/.valkey-benchmark/config-experiment-b.conf
+```
+
+### Managing Configurations
+
+**View current configuration:**
+```bash
+./bin/valkey-benchmark --show-config
+```
+
+**Clear current session's configuration:**
+```bash
+./bin/valkey-benchmark --clear-config
+```
+
+**List all saved configurations:**
+```bash
+ls -la ~/.valkey-benchmark/
+```
+
+### Benefits
+
+- **No conflicts**: Run different benchmarks in parallel without configurations interfering
+- **Automatic persistence**: Settings are saved and restored automatically
+- **Easy experimentation**: Switch between terminals/panes to compare different configurations
+- **Clean isolation**: Each benchmark session maintains its own history
+
 ## Benchmark Phases
 
 ### Phase 1: Ground Truth Loading (vec-load)
