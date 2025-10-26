@@ -42,12 +42,12 @@ CLI="${VALKEY_CLI_DIR}/valkey-cli"
 # cluster_enabled:0 //disabled (1 = enabled)
 CLUSTER_MODE=""
 
-if $CLI -h "$HOST" INFO Cluster 2>/dev/null | grep -q 'cluster_enabled:1'; then
-    echo "Running in CLUSTER mode"
-    CLUSTER_MODE="--cluster"
-else
-    echo "Running in STANDALONE mode"
-fi
+# if $CLI -h "$HOST" INFO Cluster 2>/dev/null | grep -q 'cluster_enabled:1'; then
+#     echo "Running in CLUSTER mode"
+#     CLUSTER_MODE="--cluster"
+# else
+#     echo "Running in STANDALONE mode"
+# fi
 
 # Verify executables exist
 if [ ! -x "$BENCHN" ]; then
@@ -243,15 +243,15 @@ insert_dataset() {
     # Insert dataset (ground truth phase)
     echo "Inserting vectors (this may take several minutes)..."
     local insertion_output=$(mktemp)
-    echo "running command $BENCHN -h $HOST $CLUSTER_MODE --rfr no --dataset $binary_file -t vec-load --search --vector-dim $dims --search-name $index_name --search-prefix $prefix -n $expected_vectors -c 10 --clean"
+    echo "running command $BENCHN -h $HOST  --rfr no --dataset $binary_file -t vec-load --search --vector-dim $dims --search-name $index_name --search-prefix $prefix -n $expected_vectors -c 200"
     
     # Run without tee to allow progress bars to work correctly
     # Save output to file, but let progress bars display in real-time
-    if ! $BENCHN -h "$HOST" $CLUSTER_MODE --rfr no \
+    if ! $BENCHN -h "$HOST" --rfr no \
         --dataset "$binary_file" \
         -t vec-load --search --vector-dim "$dims" \
         --search-name "$index_name" --search-prefix "$prefix" \
-        -n "$expected_vectors" -c 10 --clean > "$insertion_output" 2>&1; then
+        -n "$expected_vectors" -c 200 > "$insertion_output" 2>&1; then
 
         print_error "Failed to insert dataset"
         echo "Error output:"
@@ -346,12 +346,12 @@ run_ef_search_tests() {
     for ef_search in "${EF_SEARCH_VALUES[@]}"; do
         # Run benchmark with ef_search parameter
         local benchmark_output=$(mktemp)
-        if ! $BENCHN -h "$HOST" $CLUSTER_MODE --rfr no \
+        if ! $BENCHN -h "$HOST" --rfr no \
             --dataset "$binary_file" \
             -t vec-query --search --vector-dim "$dims" \
             --search-name "$index_name" --search-prefix "$prefix" \
             --ef-search "$ef_search" \
-            -n "$NUM_QUERIES" -c "$CONCURRENCY" --threads "$THREADS" > "$benchmark_output" 2>&1; then
+            -n "$NUM_QUERIES" -c "$CONCURRENCY" --threads "$THREADS" --nocontent > "$benchmark_output" 2>&1; then
 
             print_error "Benchmark failed for ef_search=$ef_search"
             echo "Error output:"
