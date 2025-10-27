@@ -3376,7 +3376,12 @@ static clusterNode **addClusterNode(clusterNode *node, int is_primary) {
     node->is_replica = !is_primary;
     node->selected = selected;
     printf("Adding cluster node (%s) %s %s:%d\n", (selected? "selected": "not selected"), node->name, node->ip, node->port);
-
+    if (!config.cluster_mode) {
+        node->slots_count = CLUSTER_SLOTS;
+        for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
+            node->slots[slot] = slot;
+        }
+    }
     // verify node ip + port is unique
     for (int i = 0; i < config.cluster_node_count; i++) {
         clusterNode *n = config.cluster_nodes[i];
@@ -4063,6 +4068,7 @@ cleanup:
 
 /* Atomically update the new slots configuration. */
 static void updateClusterSlotsConfiguration(void) {
+    if (!config.cluster_mode) return;
     pthread_mutex_lock(&config.is_updating_slots_mutex);
     atomic_store_explicit(&config.is_updating_slots, 1, memory_order_relaxed);
 
@@ -5448,8 +5454,8 @@ int main(int argc, char **argv) {
                config.engine_type == ENGINE_TYPE_MEMORYDB ? "MemoryDB" : config.engine_type == ENGINE_TYPE_ELASTICACHE_VALKEY ? "EC Valkey" : "OSS",
                cluster_mode_str);
        
-        int num_indexes = 1;
-        char* index_names[2] = {config.search.name, NULL};
+        // int num_indexes = 1;
+        // char* index_names[2] = {config.search.name, NULL};
         // sds flat_index = sdsnew(config.search.name);        
         // flat_index = sdscat(flat_index, "_flat");               
         // const char* index_names[2] = {config.search.name, flat_index};
@@ -5457,9 +5463,9 @@ int main(int argc, char **argv) {
 
         createDefaultSearchIndexes();
         sleep(2); /* wait a bit before checking index status */
-        waitForIndexBackfillComplete(config.engine_type, config.selected_node_count, config.selected_nodes, config.ct, index_names, num_indexes);
+        waitForIndexBackfillComplete(config.engine_type, config.selected_node_count, config.selected_nodes, config.ct, (const char**)&config.search.name, 1);
         // wait for flat indexes
-        sdsfree(flat_index);
+        // sdsfree(flat_index);
         long long search_memory = 0;
         long long search_reclaimable = 0;
         long long search_total_docs = 0;
@@ -5796,10 +5802,8 @@ int main(int argc, char **argv) {
                 // sds flat_index = sdsnew(config.search.name);
                 // flat_index = sdscat(flat_index, "_flat");               
                 // const char* index_names[2] = {config.search.name, flat_index};
-                sds index_names[1] = {config.search.name};
-                int num_indexes = 1;
                 sleep(2); /* wait a bit before checking index status */
-                waitForIndexBackfillComplete(config.engine_type, config.selected_node_count, config.selected_nodes, config.ct, index_names, num_indexes);
+                waitForIndexBackfillComplete(config.engine_type, config.selected_node_count, config.selected_nodes, config.ct, (const char**)&config.search.name, 1);
                 /* Index ingestion is done */
                 config.sequential_replacement = prev_sequential_replacement; /* restore original setting */
                 config.requests = prev_num_requests; /* restore original request count */
