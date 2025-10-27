@@ -125,7 +125,29 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Description:** Implement a new operation type `vec-scan-q-verify` that performs vector scan queries and verifies the results against self. This can be used for datasets without ground truth. We can generate "statistical" recall calculations when looking on aggregate queries. How many top-k (k=1) we got out on N queries.
 **Benefits:** Some sanity test of quality, without the cost of ground truth generation.
 
-### 29. Add additional search results quality metrics
+### 29. Embed ef-construction and m setting in the index name
+**Status:** Planned
+**Description:** Modify the index naming convention to include `ef-construction` and `m` parameters directly in the index name. This will help in easily identifying the configuration of each index based on its name.  
+**Benefits:** Simplifies index management and identification, especially when dealing with multiple indexes with different configurations
+
+### 30. Deduce vector-field-name from the dataset name. 
+**Status:** Planned
+**Description:** Implement a mechanism to automatically deduce the vector field name from the dataset name during index creation. This will streamline the process of setting up indexes by reducing the need for manual configuration.
+**Benefits:** Enhances usability and reduces configuration errors by automating the mapping between datasets and their corresponding vector fields.
+
+### 31. Vector load progress reporting
+**Status:** Planned
+**Description:** Add progress reporting for vector load operations, providing real-time feedback on the status of data loading. This could include percentage completion, estimated time remaining, and current throughput.
+**Benefits:** Improves user experience by keeping users informed about long-running load operations and helps in monitoring performance.
+
+### 32. Improve node workload distribution in CME\CMD
+**Status:** Planned
+**Description:** Enhance the workload distribution mechanism in both Cluster Mode Enabled (CME) and Cluster Mode Disabled (CMD) to ensure more balanced resource utilization across nodes.
+**Benefits:** Optimizes performance and resource usage, reducing the risk of bottlenecks and improving overall system efficiency.
+
+------
+## Search Quality Metrics Enhancements
+### Add additional search results quality metrics
 **Status:** Planned
 **Description:** Implement additional metrics to evaluate the quality of search results beyond simple recall. These metrics provide deeper insights into ranking quality and relevance ordering:
 
