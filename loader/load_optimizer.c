@@ -98,9 +98,9 @@ static const char* phase_names[] = {
 #define CLAMP(x, lo, hi) (MAX((lo), MIN((x), (hi))))
 
 /* Forward declarations */
-static int estimate_grid_points(const param_t *p);
+static int64_t estimate_grid_points(const param_t *p);
 static void init_grid_search_for_throughput(optimizer_t *opt);
-static int update_grid_search(optimizer_t *opt, double current_score, int constraints_satisfied);
+static int64_t update_grid_search(optimizer_t *opt, double current_score, int64_t constraints_satisfied);
 static void print_grid_search_plan(optimizer_t *opt);
 
 /* ============================================================================
@@ -163,12 +163,12 @@ void optimizer_destroy(optimizer_t *opt) {
 }
 
 bool optimizer_add_param(optimizer_t *opt, const char *name,
-                         int min_val, int max_val, int step_size, int initial_val) {
+                         int64_t min_val, int64_t max_val, int64_t step_size, int64_t initial_val) {
     return optimizer_add_param_grouped(opt, name, min_val, max_val, step_size, initial_val, PARAM_GROUP_MIXED);
 }
 
 bool optimizer_add_param_grouped(optimizer_t *opt, const char *name,
-                                 int min_val, int max_val, int step_size, int initial_val,
+                                 int64_t min_val, int64_t max_val, int64_t step_size, int64_t initial_val,
                                  param_group_t group) {
     assert(opt && name);
     assert(min_val <= max_val && step_size > 0);
@@ -198,7 +198,7 @@ bool optimizer_add_param_grouped(optimizer_t *opt, const char *name,
     return true;
 }
 
-bool optimizer_add_constraint_param(optimizer_t *opt, const char *name, int current_val) {
+bool optimizer_add_constraint_param(optimizer_t *opt, const char *name, int64_t current_val) {
     assert(opt && name);
     
     param_t *new_params = realloc(opt->params, (opt->num_params + 1) * sizeof(param_t));
@@ -264,7 +264,7 @@ void optimizer_set_objective(optimizer_t *opt, metric_t metric, objective_type_t
 static bool evaluate_constraints(optimizer_t *opt, measurement_t *m) {
     bool all_satisfied = true;
     
-    for (int i = 0; i < opt->num_constraints; i++) {
+    for (int64_t i = 0; i < opt->num_constraints; i++) {
         constraint_t *c = &opt->constraints[i];
         double value = m->metrics[c->metric];
         
@@ -309,7 +309,7 @@ static double compute_objective_score(const optimizer_t *opt, const measurement_
 static void record_measurement(optimizer_t *opt, const double metrics[METRIC_COUNT]) {
     /* Expand history if needed */
     if (opt->history_size >= opt->history_capacity) {
-        int new_cap = opt->history_capacity * 2;
+        int64_t new_cap = opt->history_capacity * 2;
         measurement_t *new_hist = realloc(opt->history, new_cap * sizeof(measurement_t));
         if (new_hist) {
             opt->history = new_hist;
@@ -327,7 +327,7 @@ static void record_measurement(optimizer_t *opt, const double metrics[METRIC_COU
     
     /* Snapshot current parameters */
     m->num_params = opt->num_params;
-    for (int i = 0; i < opt->num_params; i++) {
+    for (int64_t i = 0; i < opt->num_params; i++) {
         m->param_values[i] = opt->params[i].current_val;
     }
     
@@ -367,18 +367,18 @@ static void record_measurement(optimizer_t *opt, const double metrics[METRIC_COU
 static void estimate_gradients(optimizer_t *opt) {
     if (opt->history_size < 2) return;
     
-    for (int i = 0; i < opt->num_params; i++) {
+    for (int64_t i = 0; i < opt->num_params; i++) {
         param_t *p = &opt->params[i];
         
         double gradient_sum = 0.0;
-        int count = 0;
+        int64_t count = 0;
         
         /* Look back in history for changes in this parameter */
-        for (int h = opt->history_size - 1; h > 0 && count < 5; h--) {
+        for (int64_t h = opt->history_size - 1; h > 0 && count < 5; h--) {
             const measurement_t *curr = &opt->history[h];
             const measurement_t *prev = &opt->history[h - 1];
             
-            int delta = curr->param_values[i] - prev->param_values[i];
+            int64_t delta = curr->param_values[i] - prev->param_values[i];
             if (delta != 0) {
                 /* Only consider if constraints were satisfied in both */
                 if (curr->constraints_satisfied && prev->constraints_satisfied) {
@@ -447,11 +447,11 @@ static bool apply_gradient_update(optimizer_t *opt) {
     }
     
     /* Sort parameters by gradient magnitude to prioritize high-impact changes */
-    typedef struct { int idx; double magnitude; } param_priority_t;
+    typedef struct { int64_t idx; double magnitude; } param_priority_t;
     param_priority_t priorities[16];  /* Max params */
-    int priority_count = 0;
+    int64_t priority_count = 0;
     
-    for (int i = 0; i < opt->num_params; i++) {
+    for (int64_t i = 0; i < opt->num_params; i++) {
         param_t *p = &opt->params[i];
         
         /* Skip constraint-only parameters */
@@ -471,8 +471,8 @@ static bool apply_gradient_update(optimizer_t *opt) {
     }
     
     /* Sort by magnitude (descending) - simple bubble sort for small arrays */
-    for (int i = 0; i < priority_count - 1; i++) {
-        for (int j = i + 1; j < priority_count; j++) {
+    for (int64_t i = 0; i < priority_count - 1; i++) {
+        for (int64_t j = i + 1; j < priority_count; j++) {
             if (priorities[j].magnitude > priorities[i].magnitude) {
                 param_priority_t temp = priorities[i];
                 priorities[i] = priorities[j];
@@ -482,17 +482,17 @@ static bool apply_gradient_update(optimizer_t *opt) {
     }
     
     /* Apply updates starting with highest-impact parameters */
-    for (int p_idx = 0; p_idx < priority_count; p_idx++) {
-        int i = priorities[p_idx].idx;
+    for (int64_t p_idx = 0; p_idx < priority_count; p_idx++) {
+        int64_t i = priorities[p_idx].idx;
         param_t *p = &opt->params[i];
         
         /* Update adaptive step size for this parameter */
-        p->adaptive_step_size = (int)(p->step_size * opt->step_size_multiplier);
+        p->adaptive_step_size = (int64_t)(p->step_size * opt->step_size_multiplier);
         p->adaptive_step_size = MAX(p->step_size, p->adaptive_step_size);  /* Never go below base step */
         
         /* Compute step: α × gradient × adaptive_step_size */
         double raw_step = opt->learning_rate * p->gradient * p->adaptive_step_size;
-        int step = (int)round(raw_step);
+        int64_t step = (int64_t)round(raw_step);
         
         /* Must be at least one step if gradient is non-zero */
         if (fabs(raw_step) > 0.1 && step == 0) {
@@ -500,7 +500,7 @@ static bool apply_gradient_update(optimizer_t *opt) {
         }
         
         if (step != 0) {
-            int new_val = p->current_val + step;
+            int64_t new_val = p->current_val + step;
             new_val = CLAMP(new_val, p->min_val, p->max_val);
             
             if (new_val != p->current_val) {
@@ -523,7 +523,7 @@ static void project_to_feasible(optimizer_t *opt) {
     
     /* Check if current config violates constraints */
     bool violated = false;
-    for (int i = 0; i < opt->num_constraints; i++) {
+    for (int64_t i = 0; i < opt->num_constraints; i++) {
         if (opt->constraints[i].violation > 0) {
             violated = true;
             break;
@@ -532,11 +532,11 @@ static void project_to_feasible(optimizer_t *opt) {
     
     if (violated) {
         /* Scale back towards best feasible solution */
-        for (int i = 0; i < opt->num_params; i++) {
+        for (int64_t i = 0; i < opt->num_params; i++) {
             if (!opt->params[i].is_tunable) continue;  /* Skip constraint-only params */
             
-            int current = opt->params[i].current_val;
-            int feasible = opt->best_feasible.param_values[i];
+            int64_t current = opt->params[i].current_val;
+            int64_t feasible = opt->best_feasible.param_values[i];
             
             /* Move halfway back */
             opt->params[i].current_val = (current + feasible) / 2;
@@ -554,11 +554,11 @@ static bool coordinate_descent_step(optimizer_t *opt) {
     param_group_t active_group = get_active_param_group(opt->phase);
     
     /* Find next tunable parameter in active group */
-    int attempts = 0;
-    int idx = -1;
+    int64_t attempts = 0;
+    int64_t idx = -1;
     
     while (attempts < opt->num_params) {
-        int candidate_idx = opt->coordinate_index % opt->num_params;
+        int64_t candidate_idx = opt->coordinate_index % opt->num_params;
         opt->coordinate_index++;
         
         param_t *candidate = &opt->params[candidate_idx];
@@ -583,12 +583,12 @@ static bool coordinate_descent_step(optimizer_t *opt) {
     param_t *p = &opt->params[idx];
     
     /* Try increasing */
-    int new_val_up = MIN(p->current_val + p->step_size, p->max_val);
+    int64_t new_val_up = MIN(p->current_val + p->step_size, p->max_val);
     /* Try decreasing */
-    int new_val_down = MAX(p->current_val - p->step_size, p->min_val);
+    int64_t new_val_down = MAX(p->current_val - p->step_size, p->min_val);
     
     /* Choose direction that's likely to improve (use gradient hint) */
-    int new_val;
+    int64_t new_val;
     if (p->gradient > 0 && new_val_up != p->current_val) {
         new_val = new_val_up;
     } else if (p->gradient < 0 && new_val_down != p->current_val) {
@@ -669,7 +669,7 @@ static bool recall_constraints_satisfied(optimizer_t *opt) {
     if (!opt->has_feasible_solution) return false;
     
     /* Check constraints related to recall metrics */
-    for (int i = 0; i < opt->num_constraints; i++) {
+    for (int64_t i = 0; i < opt->num_constraints; i++) {
         constraint_t *c = &opt->constraints[i];
         
         /* Check if this is a recall-related metric */
@@ -705,7 +705,7 @@ static void update_phase(optimizer_t *opt) {
                 if (opt->has_feasible_solution) {
                     /* Check if we have recall constraints */
                     bool has_recall_constraints = false;
-                    for (int i = 0; i < opt->num_constraints; i++) {
+                    for (int64_t i = 0; i < opt->num_constraints; i++) {
                         metric_t m = opt->constraints[i].metric;
                         if (m == METRIC_RECALL_AVG || m == METRIC_RECALL_MIN || 
                             m == METRIC_RECALL_MAX || m == METRIC_RECALL_PERFECT_PCT || 
@@ -731,7 +731,7 @@ static void update_phase(optimizer_t *opt) {
             if (opt->has_feasible_solution) {
                 /* Same logic as PHASE_INIT for next phase selection */
                 bool has_recall_constraints = false;
-                for (int i = 0; i < opt->num_constraints; i++) {
+                for (int64_t i = 0; i < opt->num_constraints; i++) {
                     metric_t m = opt->constraints[i].metric;
                     if (m == METRIC_RECALL_AVG || m == METRIC_RECALL_MIN || 
                         m == METRIC_RECALL_MAX || m == METRIC_RECALL_PERFECT_PCT || 
@@ -757,12 +757,12 @@ static void update_phase(optimizer_t *opt) {
             /* Move to THROUGHPUT phase once binary search completes */
             if (!opt->binary_search_active) {
                 /* Binary search finished - lock RECALL/MIXED parameters */
-                for (int i = 0; i < opt->num_params; i++) {
+                for (int64_t i = 0; i < opt->num_params; i++) {
                     param_t *p = &opt->params[i];
                     if (p->is_tunable && 
                         (p->group == PARAM_GROUP_RECALL || p->group == PARAM_GROUP_MIXED)) {
                         p->locked = true;
-                        printf("[Phase Transition] Locking %s=%d (RECALL phase complete)\n",
+                        printf("[Phase Transition] Locking %s=%ld (RECALL phase complete)\n",
                                p->name, p->current_val);
                     }
                 }
@@ -845,8 +845,8 @@ static void update_phase(optimizer_t *opt) {
  */
 static void init_binary_search_for_recall(optimizer_t *opt) {
     /* Find ef_search parameter (or any MIXED/RECALL group param) */
-    int param_idx = -1;
-    for (int i = 0; i < opt->num_params; i++) {
+    int64_t param_idx = -1;
+    for (int64_t i = 0; i < opt->num_params; i++) {
         if (opt->params[i].is_tunable && 
             (opt->params[i].group == PARAM_GROUP_MIXED || opt->params[i].group == PARAM_GROUP_RECALL)) {
             param_idx = i;
@@ -868,12 +868,12 @@ static void init_binary_search_for_recall(optimizer_t *opt) {
     opt->binary_search_last_feasible = -1;
     
     /* Start with midpoint */
-    int mid = (p->min_val + p->max_val) / 2;
+    int64_t mid = (p->min_val + p->max_val) / 2;
     /* Round to nearest step_size multiple */
     mid = ((mid + p->step_size / 2) / p->step_size) * p->step_size;
     p->current_val = CLAMP(mid, p->min_val, p->max_val);
     
-    printf("[Binary Search] Starting search for %s in range [%d, %d], initial value=%d\n",
+    printf("[Binary Search] Starting search for %s in range [%ld, %ld], initial value=%ld\n",
            p->name, p->min_val, p->max_val, p->current_val);
 }
 
@@ -881,22 +881,22 @@ static void init_binary_search_for_recall(optimizer_t *opt) {
  * Update binary search based on whether current configuration satisfies recall constraints.
  * Returns 1 if search should continue, 0 if converged.
  */
-static int update_binary_search(optimizer_t *opt, int constraints_satisfied) {
+static int64_t update_binary_search(optimizer_t *opt, int64_t constraints_satisfied) {
     if (!opt->binary_search_active) return 0;
     
     param_t *p = &opt->params[opt->binary_search_param_idx];
-    int current = p->current_val;
+    int64_t current = p->current_val;
     
     if (constraints_satisfied) {
         /* Current value works - try lower */
         opt->binary_search_high = current;
         opt->binary_search_last_feasible = current;
-        printf("[Binary Search] %s=%d PASSED recall constraint, searching lower [%d, %d]\n",
+        printf("[Binary Search] %s=%ld PASSED recall constraint, searching lower [%ld, %ld]\n",
                p->name, current, opt->binary_search_low, opt->binary_search_high);
     } else {
         /* Current value fails - try higher */
         opt->binary_search_low = current;
-        printf("[Binary Search] %s=%d FAILED recall constraint, searching higher [%d, %d]\n",
+        printf("[Binary Search] %s=%ld FAILED recall constraint, searching higher [%ld, %ld]\n",
                p->name, current, opt->binary_search_low, opt->binary_search_high);
     }
     
@@ -904,7 +904,7 @@ static int update_binary_search(optimizer_t *opt, int constraints_satisfied) {
     if (opt->binary_search_high - opt->binary_search_low <= p->step_size) {
         if (opt->binary_search_last_feasible >= 0) {
             p->current_val = opt->binary_search_last_feasible;
-            printf("[Binary Search] CONVERGED: Optimal %s=%d (minimal value satisfying constraints)\n",
+            printf("[Binary Search] CONVERGED: Optimal %s=%ld (minimal value satisfying constraints)\n",
                    p->name, p->current_val);
         } else {
             printf("[Binary Search] FAILED: No feasible value found in range\n");
@@ -914,12 +914,12 @@ static int update_binary_search(optimizer_t *opt, int constraints_satisfied) {
     }
     
     /* Calculate next midpoint */
-    int mid = (opt->binary_search_low + opt->binary_search_high) / 2;
+    int64_t mid = (opt->binary_search_low + opt->binary_search_high) / 2;
     /* Round to nearest step_size multiple */
     mid = ((mid + p->step_size / 2) / p->step_size) * p->step_size;
     p->current_val = CLAMP(mid, p->min_val, p->max_val);
     
-    printf("[Binary Search] Next test: %s=%d\n", p->name, p->current_val);
+    printf("[Binary Search] Next test: %s=%ld\n", p->name, p->current_val);
     return 1;
 }
 
@@ -930,19 +930,19 @@ static int update_binary_search(optimizer_t *opt, int constraints_satisfied) {
 static void print_grid_search_plan(optimizer_t *opt) {
     printf("\n[Grid Search Plan] Parameters to optimize in THROUGHPUT phase:\n");
     
-    int param_count = 0;
-    int total_estimated_iterations = 0;
+    int64_t param_count = 0;
+    int64_t total_estimated_iterations = 0;
     
-    for (int i = 0; i < opt->num_params; i++) {
+    for (int64_t i = 0; i < opt->num_params; i++) {
         param_t *p = &opt->params[i];
         if (p->is_tunable && !p->locked && !p->grid_searched && 
             p->group == PARAM_GROUP_THROUGHPUT) {
             param_count++;
-            int estimated = estimate_grid_points(p);
+            int64_t estimated = estimate_grid_points(p);
             total_estimated_iterations += estimated;
-            
-            printf("  %d. %-12s [%4d, %4d] step=%d → ~%d iterations\n",
-                   param_count, p->name, p->min_val, p->max_val, 
+
+            printf("  %ld. %-12s [%4ld, %4ld] step=%ld → ~%ld iterations\n",
+                   param_count, p->name, p->min_val, p->max_val,
                    p->step_size, estimated);
         }
     }
@@ -950,7 +950,7 @@ static void print_grid_search_plan(optimizer_t *opt) {
     if (param_count == 0) {
         printf("  (No THROUGHPUT parameters to optimize)\n");
     } else {
-        printf("\n[Grid Search Plan] Total estimated iterations: ~%d\n", 
+        printf("\n[Grid Search Plan] Total estimated iterations: ~%ld\n", 
                total_estimated_iterations);
         printf("[Grid Search Plan] Strategy: Coordinate descent (one parameter at a time)\n");
         printf("[Grid Search Plan] Other parameters remain fixed during each search\n\n");
@@ -1027,8 +1027,8 @@ static void print_grid_search_plan(optimizer_t *opt) {
  */
 static void init_grid_search_for_throughput(optimizer_t *opt) {
     /* Find next untested THROUGHPUT parameter */
-    int param_idx = -1;
-    for (int i = 0; i < opt->num_params; i++) {
+    int64_t param_idx = -1;
+    for (int64_t i = 0; i < opt->num_params; i++) {
         param_t *p = &opt->params[i];
         if (p->is_tunable && !p->locked && !p->grid_searched && 
             p->group == PARAM_GROUP_THROUGHPUT) {
@@ -1055,9 +1055,9 @@ static void init_grid_search_for_throughput(optimizer_t *opt) {
     /* Start coarse search at minimum value */
     p->current_val = p->min_val;
     
-    printf("[Grid Search] Starting COARSE search for %s in range [%d, %d]\n",
+    printf("[Grid Search] Starting COARSE search for %s in range [%ld, %ld]\n",
            p->name, p->min_val, p->max_val);
-    printf("[Grid Search] Testing value %d/%d: %s=%d\n", 
+    printf("[Grid Search] Testing value %ld/%ld: %s=%ld\n", 
            opt->grid_search_tested_count + 1, 
            estimate_grid_points(p), p->name, p->current_val);
 }
@@ -1065,19 +1065,19 @@ static void init_grid_search_for_throughput(optimizer_t *opt) {
 /*
  * Estimate number of points in grid for a parameter
  */
-static int estimate_grid_points(const param_t *p) {
-    int range = p->max_val - p->min_val;
+static int64_t estimate_grid_points(const param_t *p) {
+    int64_t range = p->max_val - p->min_val;
     if (range <= 0) return 1;
     
     /* Coarse: log2(range/step) points */
-    int coarse = 0;
-    for (int val = p->min_val; val < p->max_val; val = val * 2 + p->step_size) {
+    int64_t coarse = 0;
+    for (int64_t val = p->min_val; val < p->max_val; val = val * 2 + p->step_size) {
         coarse++;
     }
     coarse++; /* Include max_val */
     
     /* Fine: ±2 steps around best (5 points) */
-    int fine = 5;
+    int64_t fine = 5;
     
     return coarse + fine;
 }
@@ -1086,11 +1086,11 @@ static int estimate_grid_points(const param_t *p) {
  * Update grid search: move to next test value
  * Returns 1 if search continues, 0 if complete
  */
-static int update_grid_search(optimizer_t *opt, double current_score, int constraints_satisfied) {
+static int64_t update_grid_search(optimizer_t *opt, double current_score, int64_t constraints_satisfied) {
     if (!opt->grid_search_active) return 0;
     
     param_t *p = &opt->params[opt->grid_search_param_idx];
-    int current_val = p->current_val;
+    int64_t current_val = p->current_val;
     
     opt->grid_search_tested_count++;
     
@@ -1098,13 +1098,13 @@ static int update_grid_search(optimizer_t *opt, double current_score, int constr
     if (constraints_satisfied && current_score > opt->grid_search_best_score) {
         opt->grid_search_best_value = current_val;
         opt->grid_search_best_score = current_score;
-        printf("[Grid Search] New best: %s=%d, score=%.2f\n", 
+        printf("[Grid Search] New best: %s=%ld, score=%.2f\n", 
                p->name, current_val, current_score);
     }
     
     if (opt->grid_search_phase == 0) {
         /* COARSE phase: exponential steps */
-        int next_val;
+        int64_t next_val;
         if (current_val == p->min_val && current_val == 0) {
             /* Special case: starting from 0, jump to step_size */
             next_val = p->step_size;
@@ -1123,10 +1123,10 @@ static int update_grid_search(optimizer_t *opt, double current_score, int constr
         /* Check if we need to test a midpoint before max_val */
         if (next_val >= p->max_val && current_val < p->max_val) {
             /* Large gap between current and max_val - test midpoint first */
-            int gap = p->max_val - current_val;
+            int64_t gap = p->max_val - current_val;
             if (gap > 4 * p->step_size) {
                 /* Test midpoint */
-                int midpoint = (current_val + p->max_val) / 2;
+                int64_t midpoint = (current_val + p->max_val) / 2;
                 midpoint = ((midpoint + p->step_size / 2) / p->step_size) * p->step_size;
                 if (midpoint > current_val && midpoint < p->max_val) {
                     next_val = midpoint;
@@ -1139,7 +1139,7 @@ static int update_grid_search(optimizer_t *opt, double current_score, int constr
             opt->grid_search_phase = 1;
             opt->grid_search_tested_count = 0;
             
-            printf("[Grid Search] COARSE phase complete. Best: %s=%d\n", 
+            printf("[Grid Search] COARSE phase complete. Best: %s=%ld\n", 
                    p->name, opt->grid_search_best_value);
             printf("[Grid Search] Starting FINE search around best value\n");
             
@@ -1151,26 +1151,26 @@ static int update_grid_search(optimizer_t *opt, double current_score, int constr
             /* Start fine search at fine_start */
             p->current_val = opt->grid_search_fine_start;
             
-            printf("[Grid Search] Testing fine value: %s=%d\n", p->name, p->current_val);
+            printf("[Grid Search] Testing fine value: %s=%ld\n", p->name, p->current_val);
             return 1;
         }
         
         p->current_val = next_val;
-        printf("[Grid Search] Testing value %d: %s=%d\n", 
+        printf("[Grid Search] Testing value %ld: %s=%ld\n", 
                opt->grid_search_tested_count + 1, p->name, p->current_val);
         return 1;
         
     } else {
         /* FINE phase: linear steps around best value */
         /* Use FIXED range determined at coarse→fine transition */
-        int fine_end = opt->grid_search_fine_end;
-        int next_val = current_val + p->step_size;
+        int64_t fine_end = opt->grid_search_fine_end;
+        int64_t next_val = current_val + p->step_size;
         
         if (next_val > fine_end) {
             /* Fine phase complete - all values in range tested */
             p->current_val = opt->grid_search_best_value;
             p->grid_searched = true;  /* Mark this parameter as searched */
-            printf("[Grid Search] CONVERGED: Optimal %s=%d (score=%.2f)\n",
+            printf("[Grid Search] CONVERGED: Optimal %s=%ld (score=%.2f)\n",
                    p->name, opt->grid_search_best_value, opt->grid_search_best_score);
             printf("[Grid Search] Marked %s as grid_searched\n", p->name);
             opt->grid_search_active = 0;
@@ -1178,7 +1178,7 @@ static int update_grid_search(optimizer_t *opt, double current_score, int constr
         }
         
         p->current_val = next_val;
-        printf("[Grid Search] Testing fine value: %s=%d\n", p->name, p->current_val);
+        printf("[Grid Search] Testing fine value: %s=%ld\n", p->name, p->current_val);
         return 1;
     }
 }
@@ -1267,7 +1267,7 @@ status_t optimizer_step(optimizer_t *opt, const double metrics[METRIC_COUNT]) {
         if (should_abort_early(opt, current)) {
             /* Reset to best feasible and signal abort */
             if (opt->has_feasible_solution) {
-                for (int i = 0; i < opt->num_params; i++) {
+                for (int64_t i = 0; i < opt->num_params; i++) {
                     opt->params[i].current_val = opt->best_feasible.param_values[i];
                 }
             }
@@ -1302,9 +1302,9 @@ status_t optimizer_step(optimizer_t *opt, const double metrics[METRIC_COUNT]) {
             
         case PHASE_FEASIBILITY: {
             /* Exponential search: double resources until feasible */
-            for (int i = 0; i < opt->num_params; i++) {
+            for (int64_t i = 0; i < opt->num_params; i++) {
                 param_t *p = &opt->params[i];
-                int new_val = MIN(p->current_val * 2, p->max_val);
+                int64_t new_val = MIN(p->current_val * 2, p->max_val);
                 if (new_val > p->current_val) {
                     p->current_val = new_val;
                     changed = true;
@@ -1322,7 +1322,7 @@ status_t optimizer_step(optimizer_t *opt, const double metrics[METRIC_COUNT]) {
             } else {
                 /* Update binary search based on latest measurement */
                 const measurement_t *current = &opt->history[opt->history_size - 1];
-                int continue_search = update_binary_search(opt, current->constraints_satisfied);
+                int64_t continue_search = update_binary_search(opt, current->constraints_satisfied);
                 changed = continue_search;
                 
                 if (!continue_search) {
@@ -1350,7 +1350,7 @@ status_t optimizer_step(optimizer_t *opt, const double metrics[METRIC_COUNT]) {
             } else {
                 /* Continue grid search */
                 const measurement_t *current = &opt->history[opt->history_size - 1];
-                int continue_search = update_grid_search(opt, current->objective_score, 
+                int64_t continue_search = update_grid_search(opt, current->objective_score, 
                                                          current->constraints_satisfied);
                 changed = continue_search;
                 
@@ -1403,22 +1403,22 @@ status_t optimizer_step(optimizer_t *opt, const double metrics[METRIC_COUNT]) {
 void optimizer_print_status(const optimizer_t *opt, FILE *out) {
     fprintf(out, "\n=== Optimization Status ===\n");
     fprintf(out, "Phase: %s\n", phase_names[opt->phase]);
-    fprintf(out, "Iteration: %d\n", opt->total_iterations);
+    fprintf(out, "Iteration: %ld\n", opt->total_iterations);
     fprintf(out, "Learning rate: %.4f\n", opt->learning_rate);
     fprintf(out, "Has feasible: %s\n", opt->has_feasible_solution ? "YES" : "NO");
     
     fprintf(out, "\nCurrent Parameters:\n");
-    for (int i = 0; i < opt->num_params; i++) {
+    for (int64_t i = 0; i < opt->num_params; i++) {
         const param_t *p = &opt->params[i];
         const char *tunable_mark = p->is_tunable ? "" : " [FIXED]";
-        fprintf(out, "  %s = %d [%d, %d] (gradient: %.3f)%s\n",
+        fprintf(out, "  %s = %ld [%ld, %ld] (gradient: %.3f)%s\n",
                 p->name, p->current_val, p->min_val, p->max_val, p->gradient, tunable_mark);
     }
     
     if (opt->history_size > 0) {
         const measurement_t *latest = &opt->history[opt->history_size - 1];
         fprintf(out, "\nLatest Metrics:\n");
-        for (int i = 0; i < METRIC_COUNT; i++) {
+        for (int64_t i = 0; i < METRIC_COUNT; i++) {
             fprintf(out, "  %s: %.3f\n", metric_names[i], latest->metrics[i]);
         }
         fprintf(out, "  Objective score: %.3f\n", latest->objective_score);
@@ -1430,8 +1430,8 @@ void optimizer_print_status(const optimizer_t *opt, FILE *out) {
         fprintf(out, "\nBest Feasible Solution:\n");
         fprintf(out, "  Objective: %.3f\n", opt->best_feasible.objective_score);
         fprintf(out, "  Parameters: ");
-        for (int i = 0; i < opt->best_feasible.num_params; i++) {
-            fprintf(out, "%s=%d ", opt->params[i].name,
+        for (int64_t i = 0; i < opt->best_feasible.num_params; i++) {
+            fprintf(out, "%s=%ld ", opt->params[i].name,
                     opt->best_feasible.param_values[i]);
         }
         fprintf(out, "\n");
@@ -1440,9 +1440,9 @@ void optimizer_print_status(const optimizer_t *opt, FILE *out) {
     fprintf(out, "\n");
 }
 
-void optimizer_get_current_config(const optimizer_t *opt, int *values, int max_params) {
-    int n = MIN(opt->num_params, max_params);
-    for (int i = 0; i < n; i++) {
+void optimizer_get_current_config(const optimizer_t *opt, int64_t *values, int64_t max_params) {
+    int64_t n = MIN(opt->num_params, max_params);
+    for (int64_t i = 0; i < n; i++) {
         values[i] = opt->params[i].current_val;
     }
 }
@@ -1455,7 +1455,7 @@ int optimizer_get_param_count(const optimizer_t *opt) {
     return opt->num_params;
 }
 
-const char* optimizer_get_param_name(const optimizer_t *opt, int idx) {
+const char* optimizer_get_param_name(const optimizer_t *opt, int64_t idx) {
     if (idx < 0 || idx >= opt->num_params) return NULL;
     return opt->params[idx].name;
 }
@@ -1463,7 +1463,7 @@ const char* optimizer_get_param_name(const optimizer_t *opt, int idx) {
 void optimizer_reset_to_current_config(optimizer_t *opt) {
     /* Reset all tunable parameters to their current optimized values
      * This is called before each new benchmark run */
-    for (int i = 0; i < opt->num_params; i++) {
+    for (int64_t i = 0; i < opt->num_params; i++) {
         opt->params[i].initial_val = opt->params[i].current_val;
     }
 }
@@ -1479,7 +1479,7 @@ void optimizer_print_csv_row(const optimizer_t *opt, FILE *out) {
     
     const measurement_t *m = &opt->history[opt->history_size - 1];
     
-    fprintf(out, "%d,%s,", m->iteration, phase_names[opt->phase]);
+    fprintf(out, "%ld,%s,", m->iteration, phase_names[opt->phase]);
     fprintf(out, "%.1f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,",
             m->metrics[METRIC_QPS],
             m->metrics[METRIC_AVG_LATENCY],
@@ -1511,8 +1511,8 @@ void optimizer_print_csv_row(const optimizer_t *opt, FILE *out) {
  * Models: QPS increases with resources but with diminishing returns
  *         Latency increases with load
  */
-static void simulate_benchmark(int clients, int threads, int io_threads,
-                               int reader_threads, int writer_threads,
+static void simulate_benchmark(int64_t clients, int64_t threads, int64_t io_threads,
+                               int64_t reader_threads, int64_t writer_threads,
                                double *metrics) {
     /* Simulate QPS: parallel resources × efficiency */
     double parallelism = clients * threads;
@@ -1528,7 +1528,7 @@ static void simulate_benchmark(int clients, int threads, int io_threads,
     metrics[METRIC_P99_LATENCY] = metrics[METRIC_AVG_LATENCY] * 2.5;
     
     /* Add noise */
-    for (int i = 0; i < METRIC_COUNT; i++) {
+    for (int64_t i = 0; i < METRIC_COUNT; i++) {
         double noise = ((double)rand() / RAND_MAX - 0.5) * 0.1;
         metrics[i] *= (1.0 + noise);
     }
@@ -1560,7 +1560,7 @@ int main(void) {
     printf("Goal: Maximize QPS subject to p99_latency < 1.0ms\n\n");
     
     status_t status;
-    int config[5];
+    int64_t config[5];
     double metrics[METRIC_COUNT] = {0};
     
     do {
@@ -1579,7 +1579,7 @@ int main(void) {
         }
         
         if (status == STATUS_WAIT_STABILIZATION) {
-            printf("Iteration %d: Waiting for stabilization...\n", opt->total_iterations);
+            printf("Iteration %ld: Waiting for stabilization...\n", opt->total_iterations);
         }
         
     } while (status != STATUS_CONVERGED && opt->total_iterations < 100);
@@ -1623,7 +1623,7 @@ int main(void) {
  * Usage: Compile with -DTEST_GRID_SEARCH and run the resulting binary.
  */
 
-static double compute_test_score(int target_x, int target_y, int x, int y) {    
+static double compute_test_score(int64_t target_x, int64_t target_y, int64_t x, int64_t y) {    
     /* Euclidean distance */
     double dx = x - target_x;
     double dy = y - target_y;
@@ -1633,7 +1633,7 @@ static double compute_test_score(int target_x, int target_y, int x, int y) {
     return -distance;
 }
 
-const int test_target_pairs[][2] = {
+const int64_t test_target_pairs[][2] = {
     {75, 367},
     {50, 250},
     {100, 400},
@@ -1641,7 +1641,7 @@ const int test_target_pairs[][2] = {
     {150, 450}
 };
 
-const int test_target_ranges_x[][2] = {
+const int64_t test_target_ranges_x[][2] = {
     {0, 10000},
     {0, 8000},
     {0, 450},
@@ -1649,7 +1649,7 @@ const int test_target_ranges_x[][2] = {
     {150, 451}
 };
 
-const int test_target_ranges_y[][2] = {
+const int64_t test_target_ranges_y[][2] = {
     {0, 10000},
     {45, 255},
     {95, 405},
@@ -1657,12 +1657,12 @@ const int test_target_ranges_y[][2] = {
     {145, 455}
 };
 int main(void) {
-    int num_success = 0;
-    int num_fail = 0;
+    int64_t num_success = 0;
+    int64_t num_fail = 0;
     
-    for (int test_case = 0; test_case < 5; test_case++) {
+    for (int64_t test_case = 0; test_case < 5; test_case++) {
         printf("=== Grid Search Test ===\n");
-        printf("Goal: Find optimal point (%d, %d) using grid search\n\n", test_target_pairs[test_case][0], test_target_pairs[test_case][1]);
+        printf("Goal: Find optimal point (%ld, %ld) using grid search\n\n", test_target_pairs[test_case][0], test_target_pairs[test_case][1]);
         /* Create optimizer */
         optimizer_t *opt = optimizer_create();
         if (!opt) {
@@ -1688,18 +1688,18 @@ int main(void) {
         /* Print the search plan */
         print_grid_search_plan(opt);
         
-        int iteration = 0;
-        int max_iterations = 100;
+        int64_t iteration = 0;
+        int64_t max_iterations = 100;
         status_t status = STATUS_OK;
         
         while (status != STATUS_CONVERGED && iteration < max_iterations) {
             iteration++;
             
             /* Get current parameter values */
-            int config[2];
+            int64_t config[2];
             optimizer_get_current_config(opt, config, 2);
-            int x = config[0];
-            int y = config[1];
+            int64_t x = config[0];
+            int64_t y = config[1];
             
             /* Compute score (negative distance to optimal point) */
             double score = compute_test_score(test_target_pairs[test_case][0], test_target_pairs[test_case][1], x, y);
@@ -1709,7 +1709,7 @@ int main(void) {
             double metrics[METRIC_COUNT] = {0};
             metrics[METRIC_QPS] = score;  /* Use as our optimization metric */
             
-            printf("[Iter %2d] Testing: x=%3d, y=%3d | Distance to (%d,%d): %.2f | Score: %.2f\n",
+            printf("[Iter %2d] Testing: x=%3d, y=%3d | Distance to (%ld,%ld): %.2f | Score: %.2f\n",
                 iteration, x, y, test_target_pairs[test_case][0], test_target_pairs[test_case][1], distance, score);
             
             /* Feed measurements to optimizer */
@@ -1738,21 +1738,21 @@ int main(void) {
         }
         
         printf("\n--- Grid Search Complete ---\n");
-        printf("Total iterations: %d\n", iteration);
+        printf("Total iterations: %ld\n", iteration);
         
         /* Get final configuration */
-        int final_config[2];
+        int64_t final_config[2];
         optimizer_get_current_config(opt, final_config, 2);
-        int final_x = final_config[0];
-        int final_y = final_config[1];
+        int64_t final_x = final_config[0];
+        int64_t final_y = final_config[1];
         double final_distance = -compute_test_score(test_target_pairs[test_case][0], test_target_pairs[test_case][1], final_x, final_y);
         
         printf("\nFinal Result:\n");
-        printf("  Found: x=%d, y=%d\n", final_x, final_y);
-        printf("  Target: x=%d, y=%d\n", test_target_pairs[test_case][0], test_target_pairs[test_case][1]);
+        printf("  Found: x=%ld, y=%ld\n", final_x, final_y);
+        printf("  Target: x=%ld, y=%ld\n", test_target_pairs[test_case][0], test_target_pairs[test_case][1]);
         printf("  Distance: %.2f\n", final_distance);
-        printf("  Error X: %d\n", abs(final_x - test_target_pairs[test_case][0]));
-        printf("  Error Y: %d\n", abs(final_y - test_target_pairs[test_case][1]));
+        printf("  Error X: %ld\n", abs(final_x - test_target_pairs[test_case][0]));
+        printf("  Error Y: %ld\n", abs(final_y - test_target_pairs[test_case][1]));
         
         /* Success criteria: within 2 steps of optimal */
         bool success = (abs(final_x - test_target_pairs[test_case][0]) <= 10) && (abs(final_y - test_target_pairs[test_case][1]) <= 20);
@@ -1768,9 +1768,9 @@ int main(void) {
         optimizer_destroy(opt);
     }
     printf("\n=== Grid Search Test Summary ===\n");
-    printf("Total Tests: %d\n", num_success + num_fail);
-    printf("Passed: %d\n", num_success);
-    printf("Failed: %d\n", num_fail);
+    printf("Total Tests: %ld\n", num_success + num_fail);
+    printf("Passed: %ld\n", num_success);
+    printf("Failed: %ld\n", num_fail);
     bool success = (num_fail == 0);
     return success ? 0 : 1;
 }

@@ -68,7 +68,7 @@
 #include "cli_common.h"
 #include "mt19937-64.h"
 
-extern uint16_t crc16(const char *buf, int len);
+extern uint16_t crc16(const char *buf, int64_t len);
 
 static long long nstime(void) {
     struct timespec ts;
@@ -121,7 +121,7 @@ static long long nstime(void) {
 // TODO: Use existing vectors\fields in the index as base for vector\tag\numeric generation
 static const struct {
     const char *name;
-    int len;
+    int64_t len;
 } PLACEHOLDERS[] = {
     // initialize the array in exact positions
     [0] = {"__rand_int__", 12}, 
@@ -233,7 +233,7 @@ typedef struct searchFtInfoResponse {
     /* Index options, currently unused */
     sds key_type;           /* Key type (e.g., HASH) */
     sds* prefixes;           /* Key prefixes for the index */
-    int prefixes_count; /* Number of prefixes */
+    int64_t prefixes_count; /* Number of prefixes */
     sds default_score;      /* Default score for documents */
     sds identifier;         /* Identifier for the index */
     sds attribute;        /* Attributes of the index */
@@ -253,7 +253,7 @@ typedef struct tagDistribution {
 typedef struct searchRuntimeConfig {
     /* Tag distribution fields */
     tagDistribution *tag_dists; /* Array of tag distributions */
-    int n_dists;               /* Number of distributions */
+    int64_t n_dists;               /* Number of distributions */
     sds tag_filter;                      /* Filter pattern for queries */
 } searchRuntimeConfig;
 /* Search index configuration */
@@ -261,17 +261,17 @@ typedef struct searchIndex {
     sds name;               /* Index name */
     sds algorithm;          /* Index algorithm type (e.g., HNSW, FLAT) */
     sds prefix;             /* Index key prefix */
-    int nocontent;           /* Use NOCONTENT option for FT.SEARCH */
-    int localonly;          /* Use LOCAL option for FT.SEARCH */
+    int64_t nocontent;           /* Use NOCONTENT option for FT.SEARCH */
+    int64_t localonly;          /* Use LOCAL option for FT.SEARCH */
     sds vector_field;       /* Vector field name */
-    int vector_dim;         /* Vector dimension */    
+    int64_t vector_dim;         /* Vector dimension */    
     sds tag_field;          /* Tag field name if exists*/
-    int payload_tag_len;    /* Maximum tag field payload size (for fixed-size templates) */
+    int64_t payload_tag_len;    /* Maximum tag field payload size (for fixed-size templates) */
     sds numeric_field;      /* Numeric field name if exists */
-    int ef_construction;    /* EF Construction for vector search */
-    int m;                  /* HNSW M parameter */
-    int ef_search;          /* EF Search for vector search */
-    int k;                  /* Number of nearest neighbors to return */
+    int64_t ef_construction;    /* EF Construction for vector search */
+    int64_t m;                  /* HNSW M parameter */
+    int64_t ef_search;          /* EF Search for vector search */
+    int64_t k;                  /* Number of nearest neighbors to return */
     sds metric;            /* Distance metric (e.g., L2, COSINE) */
     searchRuntimeConfig curr_conf; /* Runtime configuration for search */
 } searchIndex;
@@ -284,11 +284,11 @@ typedef enum {
 } VectorPhase;
 
 /* Callback function type for vector placeholder replacement */
-typedef void (*VectorPlaceholderCallback)(char *vector_data, const char *key, VectorPhase phase, int dim);
+typedef void (*VectorPlaceholderCallback)(char *vector_data, const char *key, VectorPhase phase, int64_t dim);
 
 /* Base vector for efficient vector generation */
 static float *base_vector = NULL;
-static int base_vector_dim = 0;
+static int64_t base_vector_dim = 0;
 
 /* Locations of the placeholders __rand_int__, __rand_1st__,
  * __rand_2nd, etc. within the RESP encoded command buffer. */
@@ -309,28 +309,28 @@ typedef struct _client {
     size_t written;     /* Bytes of 'obuf' already written */
     long long start;    /* Start time of a request */
     long long latency;  /* Request latency */
-    int seqlen;         /* Number of commands in the command sequence */
-    int pending;        /* Number of pending requests (replies to consume) */
-    int prefix_pending; /* If non-zero, number of pending prefix commands. Commands
+    int64_t seqlen;         /* Number of commands in the command sequence */
+    int64_t pending;        /* Number of pending requests (replies to consume) */
+    int64_t prefix_pending; /* If non-zero, number of pending prefix commands. Commands
                            such as auth and select are prefixed to the pipeline of
                            benchmark commands and discarded after the first send. */
-    int prefixlen;      /* Size in bytes of the pending prefix commands */
-    int thread_id;
+    int64_t prefixlen;      /* Size in bytes of the pending prefix commands */
+    int64_t thread_id;
     struct clusterNode *cluster_node;
-    int slots_last_update;
+    int64_t slots_last_update;
     uint64_t *dataset_query_indices; /* Queue of dataset query indices for recall tracking */
-    int dataset_query_head;           /* Head position in dataset query index queue */
-    int dataset_query_tail;           /* Tail position in dataset query index queue */
-    int dataset_query_capacity;       /* Capacity of dataset query index queue */
+    int64_t dataset_query_head;           /* Head position in dataset query index queue */
+    int64_t dataset_query_tail;           /* Tail position in dataset query index queue */
+    int64_t dataset_query_capacity;       /* Capacity of dataset query index queue */
     uint64_t paused : 1;
     uint64_t reuse : 1;
-    int running_queries;
+    int64_t running_queries;
 } *client;
 
 
 /* Threads. */
 typedef struct benchmarkThread {
-    int index;
+    int64_t index;
     pthread_t thread;
     aeEventLoop *el;
     list *paused_clients;
@@ -351,71 +351,71 @@ static struct config {
     cliConnInfo conn_info;
     valkeyContext *conn_ctx;
     int tls;
-    int mptcp;
+    int64_t mptcp;
     struct cliSSLconfig sslconfig;
-    int numclients;
-    _Atomic int liveclients;
-    int requests;
-    _Atomic int requests_issued;
-    _Atomic int requests_finished;
-    _Atomic int previous_requests_finished;
-    int last_printed_bytes;
+    int64_t numclients;
+    _Atomic int64_t liveclients;
+    int64_t requests;
+    _Atomic int64_t requests_issued;
+    _Atomic int64_t requests_finished;
+    _Atomic int64_t previous_requests_finished;
+    int64_t last_printed_bytes;
     long long previous_tick;
-    int keysize;
-    int datasize;
-    int replace_placeholders;
-    int keyspacelen;
-    int sequential_replacement;
-    int keepalive;
-    int pipeline;
+    int64_t keysize;
+    int64_t datasize;
+    int64_t replace_placeholders;
+    int64_t keyspacelen;
+    int64_t sequential_replacement;
+    int64_t keepalive;
+    int64_t pipeline;
     long long start;
     long long totlatency;
     const char *title;
     list *clients;
     list *paused_clients;
-    int quiet;
-    int csv;
-    int loop;
-    int idlemode;
+    int64_t quiet;
+    int64_t csv;
+    int64_t loop;
+    int64_t idlemode;
     sds input_dbnumstr;
     char *tests;
-    int stdinarg; /* get last arg from stdin. (-x option) */
-    int precision;
-    int num_threads;
+    int64_t stdinarg; /* get last arg from stdin. (-x option) */
+    int64_t precision;
+    int64_t num_threads;
     struct benchmarkThread **threads;
-    int cluster_mode;
+    int64_t cluster_mode;
     readFromReplica read_from_replica;
-    int cluster_node_count;
+    int64_t cluster_node_count;
     struct clusterNode **cluster_nodes;
-    int cluster_primary_node_count;
+    int64_t cluster_primary_node_count;
     struct clusterNode **cluster_primary_nodes;
-    int selected_node_count;
+    int64_t selected_node_count;
     struct clusterNode **selected_nodes;
     struct serverConfig *server_config;
     struct hdr_histogram *latency_histogram;
     struct hdr_histogram *current_sec_latency_histogram;
-    _Atomic int is_fetching_slots;
-    _Atomic int is_updating_slots;
-    _Atomic int slots_last_update;
-    int enable_tracking;
-    int num_functions;
-    int num_keys_in_fcall;
+    _Atomic int64_t is_fetching_slots;
+    _Atomic int64_t is_updating_slots;
+    _Atomic int64_t slots_last_update;
+    int64_t enable_tracking;
+    int64_t num_functions;
+    int64_t num_keys_in_fcall;
     pthread_mutex_t liveclients_mutex;
     pthread_mutex_t is_updating_slots_mutex;
-    int resp3; /* use RESP3 */
-    int rps;
+    int64_t resp3; /* use RESP3 */
+    int64_t rps;
     atomic_uint_fast64_t last_time_ns;
     uint64_t time_per_token;
     uint64_t time_per_burst;
-    int clean;
-    int use_search; /* Use search indexes */
+    int64_t clean;
+    int64_t use_search; /* Use search indexes */
     searchIndex search;
-    int print_search_results; /* Print FT.SEARCH results */
-    int search_debug;
+    int64_t print_search_results; /* Print FT.SEARCH results */
+    int64_t search_debug;
     EngineType engine_type; /* True if connected to MemoryDB */
     /* Dataset configuration */
-    int use_dataset;              /* Enable dataset mode */
-    int use_filtered_search;      /* Enable metadata filtering */
+    int64_t use_dataset;              /* Enable dataset mode */
+    int64_t use_filtered_search;      /* Enable metadata filtering */
     sds dataset_name;             /* Dataset identifier or path */
     void *dataset_ctx;            /* Opaque dataset context */
     uint64_t dataset_num_vectors; /* Total vectors */
@@ -425,33 +425,33 @@ static struct config {
     _Atomic uint64_t dataset_query_counter;    /* Query counter */
     
     /* Load Optimizer configuration */
-    int optimize_enabled;         /* Enable adaptive optimization */
+    int64_t optimize_enabled;         /* Enable adaptive optimization */
     optimizer_t *optimizer;       /* Optimizer instance */
     sds optimize_objective;       /* e.g., "maximize:qps" or "minimize:p99_latency" */
     sds *optimize_constraints;    /* Array of constraint strings */
-    int num_optimize_constraints; /* Number of constraints */
+    int64_t num_optimize_constraints; /* Number of constraints */
     sds optimize_csv_file;        /* CSV output file for optimization results */
-    int optimize_max_iterations;  /* Max optimization iterations */
-    int optimize_min_requests;    /* Min requests per benchmark run */
+    int64_t optimize_max_iterations;  /* Max optimization iterations */
+    int64_t optimize_min_requests;    /* Min requests per benchmark run */
     sds optimize_client_range;    /* Client count range: "min:max" */
     sds optimize_thread_range;    /* Thread count range: "min:max" */
     sds optimize_ef_search_range; /* ef_search range: "min:max" */
     sds optimize_pipeline_range;  /* Pipeline range: "min:max" */
 
     /* Config persistence flags */
-    int save_config;              /* Save configuration after successful run */
-    int no_save_config;           /* Skip saving configuration */
+    int64_t save_config;              /* Save configuration after successful run */
+    int64_t no_save_config;           /* Skip saving configuration */
     
     /* Runtime configuration management */
     sds runtime_config_file;      /* Path to runtime config file */
     runtimeConfigContext *runtime_config_ctx; /* Runtime config context */
-    int restore_runtime_config;   /* Restore original config after benchmark */
+    int64_t restore_runtime_config;   /* Restore original config after benchmark */
     
     /* Baseline latency measurement */
-    int measure_baseline;         /* Measure baseline network latency (default: 1) */
-    int no_baseline;              /* Disable baseline measurement */
-    int baseline_measured;        /* Flag indicating baseline has been measured */
-    int skip_latency_report;      /* Skip printing latency report (used internally) */
+    int64_t measure_baseline;         /* Measure baseline network latency (default: 1) */
+    int64_t no_baseline;              /* Disable baseline measurement */
+    int64_t baseline_measured;        /* Flag indicating baseline has been measured */
+    int64_t skip_latency_report;      /* Skip printing latency report (used internally) */
 } config = {0};
 
 /* Recall statistics for dataset mode */
@@ -474,7 +474,7 @@ typedef struct {
     double p95_latency_ms;
     double p99_latency_ms;
     double max_latency_ms;
-    int measured;  /* 1 if baseline has been measured, 0 otherwise */
+    int64_t measured;  /* 1 if baseline has been measured, 0 otherwise */
 } baseline_latency_t;
 
 static recallStats dataset_recall_stats;
@@ -578,7 +578,7 @@ static void parseOptimizerObjective(optimizer_t *opt, const char *objective_str)
 static void parseOptimizerConstraint(optimizer_t *opt, const char *constraint_str) {
     char *str_copy = strdup(constraint_str);
     char *parts[3];
-    int part_count = 0;
+    int64_t part_count = 0;
     
     char *token = strtok(str_copy, ":");
     while (token && part_count < 3) {
@@ -611,7 +611,7 @@ static void parseOptimizerConstraint(optimizer_t *opt, const char *constraint_st
 
 /* Parse range string "min:max" and return min and max values */
 /* Returns 1 on success, 0 on failure. If parsing fails, uses default values. */
-static int parseOptimizeRange(const char *range_str, int *min_val, int *max_val, int default_min, int default_max) {
+static int64_t parseOptimizeRange(const char *range_str, int64_t *min_val, int64_t *max_val, int64_t default_min, int64_t default_max) {
     if (!range_str || !min_val || !max_val) {
         *min_val = default_min;
         *max_val = default_max;
@@ -622,7 +622,7 @@ static int parseOptimizeRange(const char *range_str, int *min_val, int *max_val,
     char *colon = strchr(str_copy, ':');
     
     if (!colon) {
-        fprintf(stderr, "Warning: Invalid range format '%s', expected 'min:max'. Using defaults %d:%d\n",
+        fprintf(stderr, "Warning: Invalid range format '%s', expected 'min:max'. Using defaults %ld:%ld\n",
                 range_str, default_min, default_max);
         *min_val = default_min;
         *max_val = default_max;
@@ -634,11 +634,11 @@ static int parseOptimizeRange(const char *range_str, int *min_val, int *max_val,
     const char *min_str = str_copy;
     const char *max_str = colon + 1;
     
-    int parsed_min = atoi(min_str);
-    int parsed_max = atoi(max_str);
+    int64_t parsed_min = atoi(min_str);
+    int64_t parsed_max = atoi(max_str);
     
     if (parsed_min >= parsed_max) {
-        fprintf(stderr, "Warning: Invalid range '%s', min must be less than max. Using defaults %d:%d\n",
+        fprintf(stderr, "Warning: Invalid range '%s', min must be less than max. Using defaults %ld:%ld\n",
                 range_str, default_min, default_max);
         *min_val = default_min;
         *max_val = default_max;
@@ -705,11 +705,11 @@ static void collectOptimizerMetrics(double metrics[METRIC_COUNT]) {
 /* Prototypes */
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask);
 static void createMissingClients(client c);
-static benchmarkThread *createBenchmarkThread(int index);
+static benchmarkThread *createBenchmarkThread(int64_t index);
 static void freeBenchmarkThread(benchmarkThread *thread);
 static void freeBenchmarkThreads(void);
 static void *execBenchmarkThread(void *ptr);
-static void benchmark(const char *title, char *cmd, int len);
+static void benchmark(const char *title, char *cmd, int64_t len);
 static void measureBaselineLatency(void);
 static clusterNode *createClusterNode(char *ip, int port);
 // static serverConfig *getServerConfig(enum valkeyConnectionType ct, const char *ip_or_path, int port);
@@ -717,7 +717,7 @@ static sds selectTagByDistribution(void);
 static void parseTagDistributions(const char *distributions_str);
 valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char *ip_or_path, int port);
 static void freeServerConfig(serverConfig *cfg);
-static int fetchClusterSlotsConfiguration(client c);
+static int64_t fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
 static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
 
@@ -744,7 +744,7 @@ static float checkNeighbors(uint64_t query_ix,
  * Format: prefix + cluster_tag + ':' + vector_id
  * The final key format depends on prefix_len, cluster_tag_len, and vector_id_len
  */
-static int encode_vector_key_fixed(char *key_out, size_t key_out_size,
+static int64_t encode_vector_key_fixed(char *key_out, size_t key_out_size,
                                   const char *prefix,
                                   const char *cluster_tag,
                                   uint64_t vector_id) {
@@ -754,7 +754,7 @@ static int encode_vector_key_fixed(char *key_out, size_t key_out_size,
     size_t prefix_len = strlen(config.search.prefix);
     size_t cluster_tag_len = config.cluster_mode? PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len : 0;
     size_t key_write_len = prefix_len + cluster_tag_len + 1 + PLACEHOLDERS[DATASET_KEY_PLACEHOLDER_INDEX].len; // +1 for ':' +12 for vector_id
-    int ret;
+    int64_t ret;
     if (prefix) {
         memcpy(key_out, prefix, prefix_len);
     }
@@ -775,11 +775,11 @@ static int encode_vector_key_fixed(char *key_out, size_t key_out_size,
     // Encode vector ID with fixed width
     ret = snprintf(key_out, key_out_size+1, "%012lu",
                         (unsigned long)vector_id);
-    // printf("DEBUG: format='%s', encoded result='%.*s', ret=%d\n",
-    //        format, (int)vector_id_len, p, ret);
+    // printf("DEBUG: format='%s', encoded result='%.*s', ret=%ld\n",
+    //        format, (int64_t)vector_id_len, p, ret);
     assert(ret == key_write_len); // Should fit exactly
     assert(key_out[key_write_len] == '\0');
-    return (ret >= 0 && ret <= (int)key_write_len) ? 0 : -1;
+    return (ret >= 0 && ret <= (int64_t)key_write_len) ? 0 : -1;
 }
 
 /**
@@ -791,7 +791,7 @@ static int encode_vector_key_fixed(char *key_out, size_t key_out_size,
  * @param cluster_tag_len: Expected cluster tag length
  * Output parameters can be NULL to skip extracting that field.
  */
-static int decode_vector_key_fixed(const char *key,
+static int64_t decode_vector_key_fixed(const char *key,
                                   char *prefix_out, size_t prefix_size,
                                   char *cluster_tag_out, size_t cluster_tag_size,
                                   uint64_t *vector_id_out) {
@@ -868,15 +868,15 @@ static int decode_vector_key_fixed(const char *key,
  * - tag_len must be <= payload_template_len
  * - Function creates __padding__ field dynamically in remaining space
  */
-static void replaceTagFieldWithPadding(char* payload_start, int header_len, 
-                                       int payload_template_len, 
-                                       const char* tag_data, int tag_len) {
+static void replaceTagFieldWithPadding(char* payload_start, int64_t header_len, 
+                                       int64_t payload_template_len, 
+                                       const char* tag_data, int64_t tag_len) {
     assert(tag_len <= payload_template_len);
     assert(payload_start != NULL);
     assert(header_len > 0);
     
     /* Verify tag_len can be represented with header_len digits */
-    int tag_len_digits = tag_len > 0 ? snprintf(NULL, 0, "%d", tag_len) : 1;
+    int64_t tag_len_digits = tag_len > 0 ? snprintf(NULL, 0, "%ld", tag_len) : 1;
     assert(tag_len_digits <= header_len);
     
     /* Copy tag data to payload area */
@@ -897,11 +897,11 @@ static void replaceTagFieldWithPadding(char* payload_start, int header_len,
     assert(resp_start[1 + header_len + 1] == '\n');
     
     /* Calculate how many bytes we're no longer using */
-    int unused_bytes = payload_template_len - tag_len;
+    int64_t unused_bytes = payload_template_len - tag_len;
     
     /* Update the tag field length with leading zeros to maintain fixed width */
     char length_str[32];
-    int written = snprintf(length_str, sizeof(length_str), "%0*d", header_len, tag_len);
+    int64_t written = snprintf(length_str, sizeof(length_str), "%0*ld", (int)header_len, tag_len);
     assert(written == header_len); /* Ensure we didn't overflow the header length */
     
     /* Write the new length after the '$' */
@@ -932,16 +932,16 @@ static void replaceTagFieldWithPadding(char* payload_start, int header_len,
      *   - padding payload = 1021 - 2(\r\n) - 11(__padding__) - 4(len) - 1(space) = 1003
      *   - So overhead = 1021 - 1003 = 18 (the final \r\n is part of gap bytes)
      */
-    const int PADDING_OVERHEAD = 18; /* space + "__padding__" + $ + 4-digit-len + \r\n before payload */
+    const int64_t PADDING_OVERHEAD = 18; /* space + "__padding__" + $ + 4-digit-len + \r\n before payload */
     
     if (unused_bytes > PADDING_OVERHEAD) {
         char *padding_start = tag_terminator_pos + 2; /* After \r\n */
         
         /* Write: " __padding__ $XXXX\r\n" */
-        int padding_payload_len = unused_bytes - PADDING_OVERHEAD;
+        int64_t padding_payload_len = unused_bytes - PADDING_OVERHEAD;
         
-        int padding_header_written = snprintf(padding_start, unused_bytes,
-                                             " __padding__ $%04d\r\n", 
+        int64_t padding_header_written = snprintf(padding_start, unused_bytes,
+                                             " __padding__ $%04ld\r\n", 
                                              padding_payload_len);
         
         /* Verify we wrote exactly what we expected (space + __padding__ + space + $ + 4 digits + \r\n = 19 chars) */
@@ -956,7 +956,7 @@ static void replaceTagFieldWithPadding(char* payload_start, int header_len,
 
 
 typedef struct {
-    int is_gt; // 1 if ground truth, 0 if returned neighbor
+    int64_t is_gt; // 1 if ground truth, 0 if returned neighbor
     uint64_t id;
     float distance;
 } Neighbor;
@@ -995,20 +995,20 @@ static float checkNeighbors(uint64_t query_ix,
         neighbors_dists[i].is_gt = 1; // Mark as ground truth
     }
               
-    for (int j = 0; j < num_returned_neighbors; j++) {
-        int i = j + num_returned_neighbors;
+    for (int64_t j = 0; j < num_returned_neighbors; j++) {
+        int64_t i = j + num_returned_neighbors;
         neighbors_dists[i].id = returned_neighbors[j];
         neighbors_dists[i].distance = datasetGetDistanceFromQueryVector(dctx, query_ix, returned_neighbors[j]);
         neighbors_dists[i].is_gt = 0; // Mark as returned neighbor
     }
     // Sort by distance
     qsort(neighbors_dists, 2 * num_returned_neighbors, sizeof(Neighbor), compareNeighbors);
-    int num_returned = 0;
-    int num_gt = 0;
-    for (int i = 0; i < 2 * num_returned_neighbors; i++) {
+    int64_t num_returned = 0;
+    int64_t num_gt = 0;
+    for (int64_t i = 0; i < 2 * num_returned_neighbors; i++) {
         num_returned += !neighbors_dists[i].is_gt;
         num_gt += neighbors_dists[i].is_gt;
-        printf_results("Rank %d: ID=%lu, Distance=%.6f, %s\n", i, neighbors_dists[i].id, neighbors_dists[i].distance,
+        printf_results("Rank %ld: ID=%lu, Distance=%.6f, %s\n", i, neighbors_dists[i].id, neighbors_dists[i].distance,
                 neighbors_dists[i].is_gt ? "GT" : "RET");
         if (num_returned >= num_returned_neighbors) break;
         if (num_gt >= num_returned_neighbors) {
@@ -1017,7 +1017,7 @@ static float checkNeighbors(uint64_t query_ix,
                 neighbors_dists[i].is_gt) {
                 // include the tie
                 num_returned++;
-                printf_results("Including tie at rank %d for ID %lu with distance %.6f\n",
+                printf_results("Including tie at rank %ld for ID %lu with distance %.6f\n",
                            i+1, neighbors_dists[i+1].id, neighbors_dists[i+1].distance);
                 i++;
             }
@@ -1027,17 +1027,17 @@ static float checkNeighbors(uint64_t query_ix,
     // Calculate recall
     float recall = (float)num_returned / (float)config.search.k;
     if (config.print_search_results) {
-        printf("Total returned neighbors considered for recall: %d/%d\n", num_returned, num_gt);
+        printf("Total returned neighbors considered for recall: %ld/%ld\n", num_returned, num_gt);
         // Now check returned neighbors
-        int match_count = num_returned;
+        int64_t match_count = num_returned;
         pthread_mutex_lock(&recall_stats_mutex);
         printf("Query %ld: Neighbor Comparison (%ld)\n", query_ix, num_returned_neighbors);
         printf("%-6s %-20s %-20s\n", "Rank", "Returned (ID:Dist)", "Ground Truth (ID:Dist)");
         printf("%-6s %-20s %-20s\n", "----", "-------------------", "---------------------");
         Neighbor returned_neighbors_dist[num_returned_neighbors];
         Neighbor ground_truth_neighbors_dist[num_returned_neighbors];
-        int ret_idx = 0, gt_idx = 0;
-        for (int i = 0; i < num_returned_neighbors + num_returned_neighbors; i++) {
+        int64_t ret_idx = 0, gt_idx = 0;
+        for (int64_t i = 0; i < num_returned_neighbors + num_returned_neighbors; i++) {
             if (!neighbors_dists[i].is_gt && ret_idx < num_returned_neighbors) {
                 returned_neighbors_dist[ret_idx++] = neighbors_dists[i];
             } else if (neighbors_dists[i].is_gt && gt_idx < num_returned_neighbors) {
@@ -1068,7 +1068,7 @@ static float checkNeighbors(uint64_t query_ix,
         
         printf("\n");
         
-        printf("Query %lu: Returned %d/%d correct neighbors, Recall: %.2f%%\n",
+        printf("Query %lu: Returned %ld/%ld correct neighbors, Recall: %.2f%%\n",
                 query_ix, match_count, config.search.k, recall * 100.0);
         pthread_mutex_unlock(&recall_stats_mutex);
     }
@@ -1087,37 +1087,63 @@ static void printDatasetRecallStats(void) {
                         dataset_recall_stats_ext.total_queries;
     printf("\n====== DATASET RECALL STATISTICS ======\n");
     printf("  Dataset: %s\n", config.dataset_name ? config.dataset_name : "unknown");
-    printf("  Queries evaluated: %lu [Ext: %lu]\n", dataset_recall_stats.total_queries, dataset_recall_stats_ext.total_queries);
-    printf("  \n");
-    printf("  Recall@%d:\n", config.search.k);
-    printf("    Average:  %.2f%% [Ext: %.2f%%]\n", avg_recall * 100.0, avg_recall_ext * 100.0);
-    printf("    Min:      %.2f%% [Ext: %.2f%%]\n", dataset_recall_stats.min_recall * 100.0, dataset_recall_stats_ext.min_recall * 100.0);
-    printf("    Max:      %.2f%% [Ext: %.2f%%]\n", dataset_recall_stats.max_recall * 100.0, dataset_recall_stats_ext.max_recall * 100.0);
-    printf("  \n");
-    printf("  Query distribution:\n");
-    printf("    Perfect recall (100%%): %lu (%.1f%%) [Ext: %lu (%.1f%%)]\n",
-           dataset_recall_stats.perfect_recalls,
-           (float)dataset_recall_stats.perfect_recalls /
-           dataset_recall_stats.total_queries * 100.0, dataset_recall_stats_ext.perfect_recalls,
-           (float)dataset_recall_stats_ext.perfect_recalls /
-           dataset_recall_stats_ext.total_queries * 100.0);
-    printf("    Zero recall (0%%):      %lu (%.1f%%) [Ext: %lu (%.1f%%)]\n",
-           dataset_recall_stats.zero_recalls,
-           (float)dataset_recall_stats.zero_recalls /
-           dataset_recall_stats.total_queries * 100.0, 
-           dataset_recall_stats_ext.zero_recalls,
-           (float)dataset_recall_stats_ext.zero_recalls /
-           dataset_recall_stats_ext.total_queries * 100.0);
-    printf("  \n");
-    printf("  Total matches: %lu/%lu (%.2f%%) [Ext: %lu/%lu (%.2f%%)]\n",
-           dataset_recall_stats.total_matches,
-           dataset_recall_stats.total_queries * config.search.k,
-           (float)dataset_recall_stats.total_matches /
-           (dataset_recall_stats.total_queries * config.search.k) * 100.0,
-        dataset_recall_stats_ext.total_matches,
-           dataset_recall_stats_ext.total_queries * config.search.k,
-           (float)dataset_recall_stats_ext.total_matches /
-           (dataset_recall_stats_ext.total_queries * config.search.k) * 100.0);
+    if (dataset_recall_stats_ext.total_queries > 0) {
+        printf("  Queries evaluated: %lu [Ext: %lu]\n", dataset_recall_stats.total_queries, dataset_recall_stats_ext.total_queries);
+        printf("  \n");
+        printf("  Recall@%ld:\n", config.search.k);
+        printf("    Average:  %.2f%% [Ext: %.2f%%]\n", avg_recall * 100.0, avg_recall_ext * 100.0);
+        printf("    Min:      %.2f%% [Ext: %.2f%%]\n", dataset_recall_stats.min_recall * 100.0, dataset_recall_stats_ext.min_recall * 100.0);
+        printf("    Max:      %.2f%% [Ext: %.2f%%]\n", dataset_recall_stats.max_recall * 100.0, dataset_recall_stats_ext.max_recall * 100.0);
+        printf("  \n");
+        printf("  Query distribution:\n");
+        printf("    Perfect recall (100%%): %lu (%.1f%%) [Ext: %lu (%.1f%%)]\n",
+            dataset_recall_stats.perfect_recalls,
+            (float)dataset_recall_stats.perfect_recalls /
+            dataset_recall_stats.total_queries * 100.0, dataset_recall_stats_ext.perfect_recalls,
+            (float)dataset_recall_stats_ext.perfect_recalls /
+            dataset_recall_stats_ext.total_queries * 100.0);
+        printf("    Zero recall (0%%):      %lu (%.1f%%) [Ext: %lu (%.1f%%)]\n",
+            dataset_recall_stats.zero_recalls,
+            (float)dataset_recall_stats.zero_recalls /
+            dataset_recall_stats.total_queries * 100.0, 
+            dataset_recall_stats_ext.zero_recalls,
+            (float)dataset_recall_stats_ext.zero_recalls /
+            dataset_recall_stats_ext.total_queries * 100.0);
+        printf("  \n");
+        printf("  Total matches: %lu/%lu (%.2f%%) [Ext: %lu/%lu (%.2f%%)]\n",
+            dataset_recall_stats.total_matches,
+            dataset_recall_stats.total_queries * config.search.k,
+            (float)dataset_recall_stats.total_matches /
+            (dataset_recall_stats.total_queries * config.search.k) * 100.0,
+            dataset_recall_stats_ext.total_matches,
+            dataset_recall_stats_ext.total_queries * config.search.k,
+            (float)dataset_recall_stats_ext.total_matches /
+            (dataset_recall_stats_ext.total_queries * config.search.k) * 100.0);
+    } else {
+        // no Ext stats
+        printf("  Queries evaluated: %lu\n", dataset_recall_stats.total_queries);
+        printf("  \n");
+        printf("  Recall@%ld:\n", config.search.k);
+        printf("    Average:  %.2f%%\n", avg_recall * 100.0);
+        printf("    Min:      %.2f%%\n", dataset_recall_stats.min_recall * 100.0);
+        printf("    Max:      %.2f%%\n", dataset_recall_stats.max_recall * 100.0);
+        printf("  \n");
+        printf("  Query distribution:\n");
+        printf("    Perfect recall (100%%): %lu (%.1f%%)\n",
+            dataset_recall_stats.perfect_recalls,
+            (float)dataset_recall_stats.perfect_recalls /
+            dataset_recall_stats.total_queries * 100.0);
+        printf("    Zero recall (0%%):      %lu (%.1f%%)\n",
+            dataset_recall_stats.zero_recalls,
+            (float)dataset_recall_stats.zero_recalls /
+            dataset_recall_stats.total_queries * 100.0);
+        printf("  \n");
+        printf("  Total matches: %lu/%lu (%.2f%%)\n",
+            dataset_recall_stats.total_matches,
+            dataset_recall_stats.total_queries * config.search.k,
+            (float)dataset_recall_stats.total_matches /
+            (dataset_recall_stats.total_queries * config.search.k) * 100.0);
+    }
     printf("==========================================\n");
 }
 
@@ -1126,10 +1152,10 @@ static void printDatasetRecallStats(void) {
  * Key processor callback for vector ID mapping
  * This function is called for each key discovered during cluster scan
  */
-static int vectorKeyProcessor(const char *key, void *user_data, int thread_id) {
+static int64_t vectorKeyProcessor(const char *key, void *user_data, int64_t thread_id) {
     char cluster_tag[6];
     uint64_t vector_id;
-    int prefix_len = strlen(config.search.prefix);
+    int64_t prefix_len = strlen(config.search.prefix);
     char prefix[256];
     cluster_tag[6] = '\0';
     if (decode_vector_key_fixed(key,
@@ -1156,10 +1182,10 @@ static int vectorKeyProcessor(const char *key, void *user_data, int thread_id) {
 /* Fast unique vector generation using key-based deterministic randomization */
 static sds createVectorTemplate(uint64_t key_idx) {
     float* vector = zmalloc(config.search.vector_dim * sizeof(float));
-    int ph_index = -1;
+    int64_t ph_index = -1;
     char pattern = 0;
-    int pattern_offset = 0;
-    int ph_offset = 0;
+    int64_t pattern_offset = 0;
+    int64_t ph_offset = 0;
     /* Dataset mode - placeholder for entire vector */
     if (config.use_dataset) {
         ph_index = DATASET_VECTOR_PLACEHOLDER_INDEX;
@@ -1168,14 +1194,14 @@ static sds createVectorTemplate(uint64_t key_idx) {
     } else {
         ph_index = 0;
         // Original implementation: use 
-        int dim = config.search.vector_dim - VECTOR_NUM_RAND_DIM;
+        int64_t dim = config.search.vector_dim - VECTOR_NUM_RAND_DIM;
         ph_offset = dim * sizeof(float);
         /* Use multiple hash passes for better distribution */
         uint64_t hash1 = key_idx * 0x9E3779B97F4A7C15ULL;
         uint64_t hash2 = key_idx * 0xBF58476D1CE4E5B9ULL;
         
         /* Generate full vector with mixed entropy sources */
-        for (int i = 0; i < dim; i++) {
+        for (int64_t i = 0; i < dim; i++) {
             /* Mix key_idx, dimension index, and hash values */
             uint64_t mixed = hash1 ^ (hash2 + i);
             mixed *= 0x94D049BB133111EBULL;
@@ -1192,12 +1218,12 @@ static sds createVectorTemplate(uint64_t key_idx) {
         NOT REALLY WORKING BEFORE REPLACEMENT */
         if (strcmp(config.search.metric, "COSINE") == 0) {
             float norm = 0.0f;
-            for (int i = 0; i < dim; i++) {
+            for (int64_t i = 0; i < dim; i++) {
                 norm += vector[i] * vector[i];
             }
             norm = sqrtf(norm);
             if (norm > 0.0f) {
-                for (int i = 0; i < dim; i++) {
+                for (int64_t i = 0; i < dim; i++) {
                     vector[i] /= norm;
                 }
             }
@@ -1216,11 +1242,11 @@ static sds createVectorTemplate(uint64_t key_idx) {
 
 
 /* Helper function to print reply structure for debugging */
-static void debugPrintReplyStructure(valkeyReply *reply, int depth, int max_depth) {
+static void debugPrintReplyStructure(valkeyReply *reply, int64_t depth, int64_t max_depth) {
     if (!reply || depth > max_depth) return;
     
     const char *indent = "                                        "; // 40 spaces
-    int indent_len = depth * 2;
+    int64_t indent_len = depth * 2;
     if (indent_len > 40) indent_len = 40;
     
     const char *type_str = "UNKNOWN";
@@ -1233,9 +1259,9 @@ static void debugPrintReplyStructure(valkeyReply *reply, int depth, int max_dept
         case VALKEY_REPLY_ERROR: type_str = "ERROR"; break;
         default: break;
     }
-    
-    fprintf(stderr, "%.*s[%s]", indent_len, indent, type_str);
-    
+
+    fprintf(stderr, "%.*s[%s]", (int)indent_len, indent, type_str);
+
     switch (reply->type) {
         case VALKEY_REPLY_STRING:
         case VALKEY_REPLY_STATUS:
@@ -1251,12 +1277,12 @@ static void debugPrintReplyStructure(valkeyReply *reply, int depth, int max_dept
         case VALKEY_REPLY_ARRAY:
             fprintf(stderr, " (elements: %zu)\n", reply->elements);
             for (size_t i = 0; i < reply->elements && i < 20; i++) {
-                fprintf(stderr, "%.*s  [%zu]: ", indent_len, indent, i);
+                fprintf(stderr, "%.*s  [%zu]: ", (int)indent_len, indent, i);
                 debugPrintReplyStructure(reply->element[i], depth + 1, max_depth);
             }
             if (reply->elements > 20) {
                 fprintf(stderr, "%.*s  ... (%zu more elements)\n", 
-                        indent_len, indent, reply->elements - 20);
+                        (int)indent_len, indent, reply->elements - 20);
             }
             break;
         default:
@@ -1287,7 +1313,7 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
         // lock mutex to prevent interleaved prints
         pthread_mutex_lock(&recall_stats_mutex);
     }
-    int num_elements = 0;
+    int64_t num_elements = 0;
 
     /* First element is the total number of results */
     if (reply->element[0]->type == VALKEY_REPLY_INTEGER) {
@@ -1315,7 +1341,7 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
             query_neighbors = datasetGetNeighbors((dataset_ctx_t*)config.dataset_ctx, query_idx);
             
             /* Warn only once about missing metadata */
-            static int warned_no_metadata = 0;
+            static int64_t warned_no_metadata = 0;
             if (!warned_no_metadata && query_neighbors) {
                 fprintf(stderr, "WARNING: --filtered specified but dataset has no metadata. Using unfiltered ground truth.\n");
                 warned_no_metadata = 1;
@@ -1339,7 +1365,7 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
     
     /* Debug: Check if we're getting the expected number of results */
     if (config.search_debug) {
-        printf_results("DEBUG: config.search.k=%d, reply->elements=%zu, calculated total_results=%zu, nocontent=%d\n",
+        printf_results("DEBUG: config.search.k=%ld, reply->elements=%zu, calculated total_results=%zu, nocontent=%ld\n",
                       config.search.k, reply->elements, total_results, config.search.nocontent);
     }
     
@@ -1347,7 +1373,7 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
     size_t expected_results = (size_t)config.search.k;
     if (total_results < expected_results) {
         if (config.search_debug) {
-            printf_results("WARNING: Expected k=%d results but reply contains only %zu results\n",
+            printf_results("WARNING: Expected k=%ld results but reply contains only %zu results\n",
                           config.search.k, total_results);
         }
         expected_results = total_results;
@@ -1357,7 +1383,7 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
     uint64_t gt_vec_ids[expected_results];
     // size_t max_display = total_results > 100 ? 100 : total_results;
     // if (total_results > 100) {
-    printf_results("  (Showing first 100 of %zu results, expecting k=%d)\n", total_results, config.search.k);
+    printf_results("  (Showing first 100 of %zu results, expecting k=%ld)\n", total_results, config.search.k);
     // }
     // size_t end_index = total_results * 2;
     
@@ -1383,7 +1409,7 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
             result_idx++;
             
             /* Check if next element is a fields array (both NOCONTENT and CONTENT modes in MemoryDB return arrays) */
-            int has_fields_array = 0;
+            int64_t has_fields_array = 0;
             if (result_idx < reply->elements) {
                 valkeyReply *next = reply->element[result_idx];
                 if (next && next->type == VALKEY_REPLY_ARRAY) {
@@ -1466,30 +1492,30 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
     
     /* Verify we got the expected number of results */
     if (num_vecs_ids != (size_t)config.search.k && num_vecs_ids != total_results) {
-        fprintf(stderr, "WARNING: Expected k=%d results, parsed %zu vectors, total_results=%zu\n", 
+        fprintf(stderr, "WARNING: Expected k=%ld results, parsed %zu vectors, total_results=%zu\n", 
                 config.search.k, num_vecs_ids, total_results);
     }
     qsort(result_vec_ids, num_vecs_ids, sizeof(uint64_t), uint64_cmp);
     qsort(gt_vec_ids, num_vecs_ids, sizeof(uint64_t), uint64_cmp);
     /* Compare with ground truth if available */
     if (config.use_dataset && num_vecs_ids > 0) {
-        int matches = 0;
-        int i;
+        int64_t matches = 0;
+        int64_t i;
         for (i = 0; i < num_vecs_ids; i++) {
             if (result_vec_ids[i] == gt_vec_ids[i]) {
                 matches++;
                 int64_t query_index = datasetGetQueryIxByNeighbor((dataset_ctx_t*)config.dataset_ctx, result_vec_ids[i], 0);
-                int has_more_query_sources = datasetGetQueryIxByNeighbor((dataset_ctx_t*)config.dataset_ctx, result_vec_ids[i], 1);
-                printf_results("  [SR == GT] %lu, [MATCH], is neighbor of query_index %ld, %s %d\n",
+                int64_t has_more_query_sources = datasetGetQueryIxByNeighbor((dataset_ctx_t*)config.dataset_ctx, result_vec_ids[i], 1);
+                printf_results("  [SR == GT] %lu, [MATCH], is neighbor of query_index %ld, %s %ld\n",
                    result_vec_ids[i], query_index, has_more_query_sources > 0 ? "(multiple query sources)" : "", has_more_query_sources + 1);
             } else {
                 break;
             }
         }
-        int num_perfect_matches = i;
-        printf_results("\n=== ZZZ Ground Truth Comparison [perfect match %d]===\n", num_perfect_matches);
+        int64_t num_perfect_matches = i;
+        printf_results("\n=== ZZZ Ground Truth Comparison [perfect match %ld]===\n", num_perfect_matches);
         for (; i < num_vecs_ids; i++) {
-            int found = -1;
+            int64_t found = -1;
             for (uint32_t j = num_perfect_matches; j < config.search.k; j++) {
                 if (result_vec_ids[i] == gt_vec_ids[j]) {
                     matches++;
@@ -1498,20 +1524,20 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
                 }
             }
             int64_t query_index = datasetGetQueryIxByNeighbor((dataset_ctx_t*)config.dataset_ctx, result_vec_ids[i], 0);
-            int has_more_query_sources = datasetGetQueryIxByNeighbor((dataset_ctx_t*)config.dataset_ctx, result_vec_ids[i], 1);
-            printf_results("  [SR vs GT] %lu vs %lu, %s(found in GT at index %d), is neighbor of query_index %ld, %s %d\n",
+            int64_t has_more_query_sources = datasetGetQueryIxByNeighbor((dataset_ctx_t*)config.dataset_ctx, result_vec_ids[i], 1);
+            printf_results("  [SR vs GT] %lu vs %lu, %s(found in GT at index %ld), is neighbor of query_index %ld, %s %ld\n",
                    result_vec_ids[i], gt_vec_ids[i], (found >= 0) ? "[MATCH]" : "[MISS]", found, query_index, has_more_query_sources > 0 ? "(multiple query sources)" : "", has_more_query_sources + 1);
         }
         float recall = (float)matches / num_vecs_ids;
-        printf_results("  Total matches: %d out of %zu, Recall: %.2f%%\n", matches, num_vecs_ids, recall * 100.0f);
+        printf_results("  Total matches: %ld out of %zu, Recall: %.2f%%\n", matches, num_vecs_ids, recall * 100.0f);
 
         if (config.print_search_results) {
             pthread_mutex_unlock(&recall_stats_mutex);
         }
         updateRecallStats(recall);
         // perform the extended checkNeighbors for 10% of the responses randomly
-        static __thread int num_results = 0;
-        if (num_results % 10000 == 0) {
+        static __thread int64_t num_results = 1;
+        if (num_results % 10000000 == 0) {
             recall = checkNeighbors(query_idx, result_vec_ids, num_vecs_ids, query_neighbors);
             updateRecallStatsExt(recall);
         }
@@ -1528,7 +1554,7 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
     printf_results("\n");
 }
 
-int isSelected(int is_primary) {
+int isSelected(int64_t is_primary) {
     if ((config.read_from_replica == FROM_REPLICA_ONLY && is_primary) || 
         ((config.read_from_replica == FROM_PRIMARY_ONLY) && !is_primary)) {
         return 0;
@@ -1543,7 +1569,7 @@ static uint64_t dictSdsHash(const void *key) {
 }
 
 static int dictSdsKeyCompare(const void *key1, const void *key2) {
-    int l1, l2;
+    int64_t l1, l2;
     l1 = sdslen((sds)key1);
     l2 = sdslen((sds)key2);
     if (l1 != l2) return 0;
@@ -1620,7 +1646,7 @@ static inline void generate_vector_fast(float *vector, unsigned int key_idx) {
     init_genrand64(key_idx * 2654435761U);
     
     /* Generate vector components */
-    for (int i = 0; i < config.search.vector_dim; i++) {
+    for (int64_t i = 0; i < config.search.vector_dim; i++) {
         uint64_t r = genrand64_int64();
         /* Convert to float in range [-1, 1] */
         vector[i] = ((float)(r & 0x7FFFFFFF) / 0x40000000) - 1.0f;
@@ -1628,7 +1654,7 @@ static inline void generate_vector_fast(float *vector, unsigned int key_idx) {
 }
 
 /* Initialize base vector for efficient generation */
-static void initBaseVector(int dim) {
+static void initBaseVector(int64_t dim) {
     if (base_vector && base_vector_dim != dim) {
         zfree(base_vector);
         base_vector = NULL;
@@ -1641,7 +1667,7 @@ static void initBaseVector(int dim) {
         /* Initialize with random values */
         init_genrand64(42); /* Fixed seed for reproducibility */
         
-        for (int i = 0; i < dim; i++) {
+        for (int64_t i = 0; i < dim; i++) {
             uint64_t r = genrand64_int64();
             base_vector[i] = ((float)(r & 0x7FFFFFFF) / 0x40000000) - 1.0f;
         }
@@ -1649,7 +1675,7 @@ static void initBaseVector(int dim) {
 }
 
 static sds getSearchKeyTemplate(void) {
-    int ph_index = 0;
+    int64_t ph_index = 0;
     size_t key_len = strlen(config.search.prefix) + 1; // +1 for ':'
     if (config.cluster_mode) {
         key_len += PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len;
@@ -1661,14 +1687,14 @@ static sds getSearchKeyTemplate(void) {
     }
     key_len += PLACEHOLDERS[ph_index].len;
     sds key = sdsnewlen("", key_len);
-    int ret = 0;
+    int64_t ret = 0;
     /* Dataset mode - placeholder for entire vector */
     if (config.cluster_mode) {
         ret = snprintf(key, key_len+1, "%s{tag}:%s", config.search.prefix, PLACEHOLDERS[ph_index].name);
     } else {
         ret = snprintf(key, key_len+1, "%s:%s", config.search.prefix, PLACEHOLDERS[ph_index].name);
     }    
-    assert(ret == (int)(key_len)); // -1 for null terminator    
+    assert(ret == (int64_t)(key_len)); // -1 for null terminator    
     return key;
 }
 
@@ -1683,13 +1709,14 @@ static sds createTagTemplate(void) {
     return tag;
 }
 
-void setArg(const char **argv, size_t *argvlen, int *argc, const char* value, int value_len) {
+void setArg(const char **argv, size_t *argvlen, int64_t *argc, const char* value, int64_t value_len) {
+    assert(*argc < 20); /* Prevent buffer overflow in argv arrays */
     argv[(*argc)] = value;
     argvlen[(*argc)++] = value_len;
 }
 /* Benchmark function for vector operations with cluster awareness 
  * Supports multiple tag and numeric fields dynamically */
-static int createSearchHsetTemplate(char **cmd) {
+static int64_t createSearchHsetTemplate(char **cmd) {
     /* Generate key with appropriate cluster tag */    
     sds key = getSearchKeyTemplate();
     /* Validation checks */
@@ -1702,7 +1729,7 @@ static int createSearchHsetTemplate(char **cmd) {
      * Allow room for multiple tag/numeric fields: 2 + 2 + (2*5) = 14 max args */
     const char *argv[20];
     size_t argvlen[20];
-    int argc = 0;
+    int64_t argc = 0;
     
     /* Command and key */
     setArg(argv, argvlen, &argc, "HSET", 4);
@@ -1728,7 +1755,7 @@ static int createSearchHsetTemplate(char **cmd) {
         setArg(argv, argvlen, &argc, PLACEHOLDERS[DATASET_NUMERIC_SCORE_PLACEHOLDER_INDEX].name, PLACEHOLDERS[DATASET_NUMERIC_SCORE_PLACEHOLDER_INDEX].len);
     }
     
-    int len = valkeyFormatCommandArgv(cmd, argc, argv, argvlen);
+    int64_t len = valkeyFormatCommandArgv(cmd, argc, argv, argvlen);
     
     /* Cleanup allocated strings */
     sdsfree(key);
@@ -1737,7 +1764,7 @@ static int createSearchHsetTemplate(char **cmd) {
 }
 
 /* Benchmark function for vector operations with cluster awareness */
-static int createSearchCmdTemplate(char **cmd) {
+static int64_t createSearchCmdTemplate(char **cmd) {
     sds index_name = sdsdup(config.search.name);
     // Check if algorithm is flat or hnsw [case insensitive], if it is flat, append '_flat' to index name. otherwise use index name as is
     if (strcasecmp(config.search.algorithm, "flat") == 0) {
@@ -1750,7 +1777,7 @@ static int createSearchCmdTemplate(char **cmd) {
     }
 
     /* Validation checks */
-    printf("Creating FT.SEARCH command template for index '%s' algorithm %s dimension %d rand-dim %ld k %d ef_search %d vector_field %s tag_field %s tag_filter %s nocontent %d\n", 
+    printf("Creating FT.SEARCH command template for index '%s' algorithm %s dimension %ld rand-dim %ld k %ld ef_search %ld vector_field %s tag_field %s tag_filter %s nocontent %ld\n", 
         index_name, config.search.algorithm, config.search.vector_dim, VECTOR_NUM_RAND_DIM, 
         config.search.k, config.search.ef_search, config.search.vector_field, 
         config.search.tag_field, config.search.curr_conf.tag_filter, config.search.nocontent);
@@ -1760,7 +1787,7 @@ static int createSearchCmdTemplate(char **cmd) {
     
     /* Build KNN query */
     sds query;
-    int is_hnsw = (strcasecmp(config.search.algorithm, "hnsw") == 0);
+    int64_t is_hnsw = (strcasecmp(config.search.algorithm, "hnsw") == 0);
     sds filter;
     if (config.search.curr_conf.tag_filter) {
         filter = sdscatprintf(sdsempty(), "@%s:{%s}", 
@@ -1771,7 +1798,7 @@ static int createSearchCmdTemplate(char **cmd) {
     } 
     if (is_hnsw) {
         query = sdscatprintf(sdsempty(), 
-            "%s=>[KNN %d @%s $%s EF_RUNTIME %d]", 
+            "%s=>[KNN %ld @%s $%s EF_RUNTIME %ld]", 
             filter,
             config.search.k, 
             config.search.vector_field, 
@@ -1779,7 +1806,7 @@ static int createSearchCmdTemplate(char **cmd) {
             config.search.ef_search);
     } else {
         query = sdscatprintf(sdsempty(), 
-            "%s=>[KNN %d @%s $%s]", 
+            "%s=>[KNN %ld @%s $%s]", 
             filter,
             config.search.k, 
             config.search.vector_field,
@@ -1788,11 +1815,11 @@ static int createSearchCmdTemplate(char **cmd) {
 
     /* Build FT.SEARCH command using argv approach */
     sds score_field = sdscatprintf(sdsempty(), "__%s_score", config.search.vector_field);
-    sds k_str = sdscatprintf(sdsempty(), "%d", config.search.k);
+    sds k_str = sdscatprintf(sdsempty(), "%ld", config.search.k);
     
     const char *argv[20];  /* Max arguments we might need */
     size_t argvlen[20];
-    int argc = 0;
+    int64_t argc = 0;
     
     /* Command name */
     setArg(argv, argvlen, &argc, "FT.SEARCH", 9);
@@ -1831,7 +1858,7 @@ static int createSearchCmdTemplate(char **cmd) {
     setArg(argv, argvlen, &argc, QUERY_VECTOR, 12);
     setArg(argv, argvlen, &argc, vector_binary, sdslen(vector_binary));
     
-    int len = valkeyFormatCommandArgv(cmd, argc, argv, argvlen);
+    int64_t len = valkeyFormatCommandArgv(cmd, argc, argv, argvlen);
     
     sdsfree(k_str);
     sdsfree(score_field);
@@ -1845,16 +1872,16 @@ static void replacePlaceholderClusterTag(client c, const size_t *indices, const 
     assert(c->thread_id >= 0);
     clusterNode *node = c->cluster_node;
     assert(node);
-    int is_updating_slots = atomic_load_explicit(&config.is_updating_slots, 
+    int64_t is_updating_slots = atomic_load_explicit(&config.is_updating_slots, 
                                                  memory_order_relaxed);                                                 
     if (is_updating_slots) updateClusterSlotsConfiguration();
     // update key with counter to ensure different keys
     uint64_t key_idx = atomic_fetch_add_explicit(key_counter, 1, memory_order_relaxed);
     assert(node->slots_count > 0);
     /* Select a random slot from this node */
-    int slot = node->slots[key_idx % node->slots_count];
+    int64_t slot = node->slots[key_idx % node->slots_count];
     const char *tag = crc16_slot_table[slot];
-    int taglen = strlen(tag);
+    int64_t taglen = strlen(tag);
     assert(taglen <= 3); /* Ensure tag fits within placeholder */
     
     /* Replace all occurrences in-place (exactly 8 bytes) */
@@ -1865,7 +1892,7 @@ static void replacePlaceholderClusterTag(client c, const size_t *indices, const 
         placeholder[1 + taglen] = '}';         // Closing brace
         // Pad remaining bytes with random data if tag is shorter than 3 bytes
         if (taglen < 3) {
-            for (int k = 0; k < 3 - taglen; k++) {
+            for (int64_t k = 0; k < 3 - taglen; k++) {
                 placeholder[1 + taglen + 1 + k] = 'a' + (rand() % 26); // Random lowercase letter
             }
         }
@@ -1883,7 +1910,7 @@ static void createDefaultSearchIndexes(void) {
         config.conn_info.hostip = config.cluster_primary_nodes[0]->ip;
         config.conn_info.hostport = config.cluster_primary_nodes[0]->port;
     }
-    printf("[cluster-mode:%d] Creating search index '%s' on %s:%d if it does not exist...\n", 
+    printf("[cluster-mode:%ld] Creating search index '%s' on %s:%d if it does not exist...\n", 
            config.cluster_mode, config.search.name, config.conn_info.hostip, config.conn_info.hostport);
     fflush(stdout);
     valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
@@ -1894,7 +1921,7 @@ static void createDefaultSearchIndexes(void) {
         assert(0);
     }
     // }
-    int num_indexes = 1;
+    int64_t num_indexes = 1;
     sds indexes_to_create[2] = {config.search.name, NULL};
     sds algorithms[2] = {config.search.algorithm, NULL};
     // // compare case insensitively
@@ -1906,10 +1933,10 @@ static void createDefaultSearchIndexes(void) {
     //     printf("Configured HNSW index, will also create fallback FLAT index '%s'\n", indexes_to_create[1]);
     //     num_indexes = 2;
     // }
-    for (int i = 0; i < num_indexes; i++) {        
+    for (int64_t i = 0; i < num_indexes; i++) {        
         /* Check if any indexes exist */
         valkeyReply *list_reply = valkeyCommand(ctx, "FT._LIST");
-        int index_exists = 0;
+        int64_t index_exists = 0;
 
         if (list_reply && list_reply->type == VALKEY_REPLY_ARRAY) {
             printf("Found %zu existing indexes: ", list_reply->elements);
@@ -1951,21 +1978,21 @@ static void createDefaultSearchIndexes(void) {
         if (strcmp(algorithms[i], "hnsw") == 0) {
             /* Add TAG field if configured */
             if (config.search.tag_field) {            
-                reply = valkeyCommand(ctx, "FT.CREATE %s PREFIX 1 %s SCHEMA %s TAG %s VECTOR %s 12 TYPE FLOAT32 DIM %d DISTANCE_METRIC %s M %d EF_CONSTRUCTION %d EF_RUNTIME %d",
+                reply = valkeyCommand(ctx, "FT.CREATE %s PREFIX 1 %s SCHEMA %s TAG %s VECTOR %s 12 TYPE FLOAT32 DIM %ld DISTANCE_METRIC %s M %ld EF_CONSTRUCTION %ld EF_RUNTIME %ld",
                 indexes_to_create[i], config.search.prefix, config.search.tag_field, config.search.vector_field, algorithms[i], config.search.vector_dim, config.search.metric, config.search.m,
                 config.search.ef_construction, config.search.ef_search);
             } else {
-                reply = valkeyCommand(ctx, "FT.CREATE %s PREFIX 1 %s SCHEMA %s VECTOR %s 12 TYPE FLOAT32 DIM %d DISTANCE_METRIC %s M %d EF_CONSTRUCTION %d EF_RUNTIME %d",
+                reply = valkeyCommand(ctx, "FT.CREATE %s PREFIX 1 %s SCHEMA %s VECTOR %s 12 TYPE FLOAT32 DIM %ld DISTANCE_METRIC %s M %ld EF_CONSTRUCTION %ld EF_RUNTIME %ld",
                 indexes_to_create[i], config.search.prefix, config.search.vector_field, algorithms[i], config.search.vector_dim, config.search.metric, config.search.m,
                 config.search.ef_construction, config.search.ef_search);
             }
         } else {
             /* Add TAG field if configured */
             if (config.search.tag_field) {            
-                reply = valkeyCommand(ctx, "FT.CREATE %s PREFIX 1 %s SCHEMA %s TAG %s VECTOR %s 6 TYPE FLOAT32 DIM %d DISTANCE_METRIC %s",
+                reply = valkeyCommand(ctx, "FT.CREATE %s PREFIX 1 %s SCHEMA %s TAG %s VECTOR %s 6 TYPE FLOAT32 DIM %ld DISTANCE_METRIC %s",
                 indexes_to_create[i], config.search.prefix, config.search.tag_field, config.search.vector_field, algorithms[i], config.search.vector_dim, config.search.metric);
             } else {
-                reply = valkeyCommand(ctx, "FT.CREATE %s PREFIX 1 %s SCHEMA %s VECTOR %s 6 TYPE FLOAT32 DIM %d DISTANCE_METRIC %s",
+                reply = valkeyCommand(ctx, "FT.CREATE %s PREFIX 1 %s SCHEMA %s VECTOR %s 6 TYPE FLOAT32 DIM %ld DISTANCE_METRIC %s",
                 indexes_to_create[i], config.search.prefix, config.search.vector_field, algorithms[i], config.search.vector_dim, config.search.metric);
             }
         }
@@ -2132,7 +2159,7 @@ static void replacePlaceholderVector(const size_t *indices, const size_t count,
     float vector[2];
     uint64_t state = key ? key : 0x123456789ABCDEF0ULL;
     
-    for (int i = 0; i < 2; i++) {
+    for (int64_t i = 0; i < 2; i++) {
         state ^= state >> 12;
         state ^= state << 25;
         state ^= state >> 27;
@@ -2171,7 +2198,7 @@ static void replacePlaceholderVector(const size_t *indices, const size_t count,
 
 static void replacePlaceholderDataset(
     client c,
-    int thread_id,
+    int64_t thread_id,
     const size_t key_count, const size_t *key_indices,
     _Atomic uint64_t *key_counter,
     const size_t vec_count, const size_t *vec_indices,
@@ -2185,7 +2212,7 @@ static void replacePlaceholderDataset(
     if (key_count > 0 && vec_count > 0) {
         uint64_t dataset_prefill_counter = atomic_load(&config.dataset_prefill_counter);
         // if dataset_prefill_counter >= keyspacelen, then dataset is prefilled
-        int dataset_prefilled = dataset_prefill_counter >= config.keyspacelen;
+        int64_t dataset_prefilled = dataset_prefill_counter >= config.keyspacelen;
         /* Validate placeholder consistency */
         assert((key_count == vec_count) || (vec_count == 0) || (key_count == 0));
         // if (config.cluster_mode) {
@@ -2196,9 +2223,9 @@ static void replacePlaceholderDataset(
             assert(key_count == cluster_tag_count || cluster_tag_count == 0);
             uint64_t vector_id;
             char *key_write_pos = cmd + key_indices[i];
-            int cluster_tag_len = config.cluster_mode ? PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len : 0;
+            int64_t cluster_tag_len = config.cluster_mode ? PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len : 0;
             char *key = key_write_pos - strlen(config.search.prefix) - cluster_tag_len - 1;
-            int key_len = strlen(config.search.prefix)+ cluster_tag_len + PLACEHOLDERS[DATASET_KEY_PLACEHOLDER_INDEX].len + 1;
+            int64_t key_len = strlen(config.search.prefix)+ cluster_tag_len + PLACEHOLDERS[DATASET_KEY_PLACEHOLDER_INDEX].len + 1;
             float *vec_write_pos = (float *)(cmd + vec_indices[i]);
             const char* cluster_tag = NULL;
             uint64_t dataset_idx = 0;
@@ -2247,7 +2274,7 @@ static void replacePlaceholderDataset(
                 if (config.cluster_mode) {                    
                     char *cluster_tag_pos = cmd + cluster_tag_indices[i];
                     /* Extract cluster tag using reusable function */
-                    int tag_len = PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len;
+                    int64_t tag_len = PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len;
                     memcpy(cluster_tag_buf, cluster_tag_pos, tag_len);
                     cluster_tag_buf[tag_len] = '\0'; /* Null-terminate */
                     cluster_tag_to_map = cluster_tag_buf;
@@ -2260,10 +2287,10 @@ static void replacePlaceholderDataset(
                 
                 /* Generate actual tag value */
                 sds selected_tag = selectTagByDistribution();
-                int actual_tag_len = selected_tag ? sdslen(selected_tag) : 0;
+                int64_t actual_tag_len = selected_tag ? sdslen(selected_tag) : 0;
                 
                 /* Calculate RESP header length - number of digits needed for payload_tag_len */
-                int header_len = snprintf(NULL, 0, "%d", config.search.payload_tag_len);
+                int64_t header_len = snprintf(NULL, 0, "%ld", config.search.payload_tag_len);
                 
                 /* Replace tag field and adjust RESP lengths with padding */
                 replaceTagFieldWithPadding(tag_payload_start, header_len, 
@@ -2273,26 +2300,31 @@ static void replacePlaceholderDataset(
                 if (selected_tag) sdsfree(selected_tag);
             }
             /* Debug output for first few inserts */
-            static int debug_count = 0;
+            static int64_t debug_count = 0;
             if (debug_count < 5) {
-                printf("DEBUG INSERT: dataset_idx=%lu, vector_id=%lu, key_str='%s', vec_size=%u bytes\n",
+                printf("DEBUG INSERT: dataset_idx=%lu, vector_id=%lu, key_str='%s', vec_size=%lu bytes\n",
                     dataset_idx, vector_id, key, config.search.vector_dim * 4);
                 debug_count++;
             }
         }
     }
-
     /* SEARCH: only vector replacement */
     if (vec_count > 0 && key_count == 0) {
         c->running_queries++;
-        static __thread uint64_t next_query_idx = 0;
-        if (next_query_idx == 0) {
-            next_query_idx = thread_id + (1 << 10) - 1;
-            next_query_idx *= 2654435761;
+        static __thread uint64_t rng_state = 0;
+        if (rng_state == 0) {
+            // Initialize with thread-specific seed
+            rng_state = (uint64_t)thread_id * 0x9e3779b97f4a7c15ULL + (uint64_t)nstime();
         }
+        
         for (size_t i = 0; i < vec_count; i++) {
             float *vec_write_pos = (float *)(cmd + vec_indices[i]);
-            uint64_t query_idx = next_query_idx % c->dataset_query_capacity;
+            
+            // xorshift64* - high quality PRNG
+            rng_state ^= rng_state >> 12;
+            rng_state ^= rng_state << 25;
+            rng_state ^= rng_state >> 27;
+            uint64_t query_idx = (rng_state * 0x2545F4914F6CDD1DULL) % c->dataset_query_capacity;
 
             /* Enqueue query index for recall tracking */
             if (c && c->dataset_query_indices) {
@@ -2300,17 +2332,37 @@ static void replacePlaceholderDataset(
             }
 
             datasetSetQueryVec((dataset_ctx_t*)config.dataset_ctx, query_idx, vec_write_pos);
-            next_query_idx++;
-            next_query_idx *= 2654435761; // Knuth's multiplicative hash to reduce collisions in lower bits
         }
     }
+    // /* SEARCH: only vector replacement */
+    // if (vec_count > 0 && key_count == 0) {
+    //     c->running_queries++;
+    //     static __thread uint64_t next_query_idx = 0;
+    //     if (next_query_idx == 0) {
+    //         next_query_idx = thread_id + (1 << 10) - 1;
+    //         next_query_idx *= 2654435761;
+    //     }
+    //     for (size_t i = 0; i < vec_count; i++) {
+    //         float *vec_write_pos = (float *)(cmd + vec_indices[i]);
+    //         uint64_t query_idx = next_query_idx % c->dataset_query_capacity;
+
+    //         /* Enqueue query index for recall tracking */
+    //         if (c && c->dataset_query_indices) {
+    //             c->dataset_query_indices[(c->dataset_query_tail++) % c->dataset_query_capacity] = query_idx;
+    //         }
+
+    //         datasetSetQueryVec((dataset_ctx_t*)config.dataset_ctx, query_idx, vec_write_pos);
+    //         next_query_idx++;
+    //         next_query_idx *= 2654435761; // Knuth's multiplicative hash to reduce collisions in lower bits
+    //     }
+    // }
 
     /* DELETE: only key replacement */
     if (key_count > 0 && vec_count == 0) {
         for (size_t i = 0; i < key_count; i++) {
             char *key_write_pos = cmd + key_indices[i];
             char *key = key_write_pos - strlen(config.search.prefix) - 1;
-            int key_len = strlen(config.search.prefix) + PLACEHOLDERS[DATASET_KEY_PLACEHOLDER_INDEX].len + 1;
+            int64_t key_len = strlen(config.search.prefix) + PLACEHOLDERS[DATASET_KEY_PLACEHOLDER_INDEX].len + 1;
             if (config.cluster_mode) {
                 key -= PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len;
                 key_len += PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len;
@@ -2348,10 +2400,10 @@ static void replacePlaceholderDataset(
     }        
 }
 
-static void replacePlaceholders(client c, char *cmd_data, int cmd_count) {
+static void replacePlaceholders(client c, char *cmd_data, int64_t cmd_count) {
     static _Atomic uint64_t seq_key[PLACEHOLDER_NUM_OF] = {0};
 
-    for (int cmd_index = 0; cmd_index < cmd_count; cmd_index++) {
+    for (int64_t cmd_index = 0; cmd_index < cmd_count; cmd_index++) {
         char *cmd = cmd_data + cmd_index * placeholders.cmd_len;
         
         /* Handle __rand_int__ separately (multiple different values) */
@@ -2427,7 +2479,7 @@ static void freeClient(client c) {
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
     if (c->thread_id >= 0) {
-        int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
+        int64_t requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
         if (requests_finished >= config.requests) {
             aeStop(el);
         }
@@ -2487,7 +2539,7 @@ static void resetClient(client c) {
  * - Due to the time event only allowing a delay of 1ms, a request for the next 1ms is issued.
  *
  * The function is thread-safe. */
-static long long acquireTokenOrWait(int tokens) {
+static long long acquireTokenOrWait(int64_t tokens) {
     uint64_t time_per_token = config.time_per_token;
     uint64_t time_per_burst = config.time_per_burst;
     uint64_t new_time = 0;
@@ -2534,7 +2586,7 @@ static long long acquireTokenOrWait(int tokens) {
 }
 
 static void clientDone(client c) {
-    int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
+    int64_t requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     if (requests_finished >= config.requests) {
         freeClient(c);
         if (!config.num_threads && config.el) aeStop(config.el);
@@ -2585,7 +2637,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                      * If the error is not topology-update related then we
                      * immediately exit to avoid false results. */
                     if (c->cluster_node && c->staglen) {
-                        int fetch_slots = 0, do_wait = 0;
+                        int64_t fetch_slots = 0, do_wait = 0;
                         if (!strncmp(r->str, "MOVED", 5) || !strncmp(r->str, "ASK", 3))
                             fetch_slots = 1;
                         else if (!strncmp(r->str, "CLUSTERDOWN", 11)) {
@@ -2636,7 +2688,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     }
                     continue;
                 }
-                int requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
+                int64_t requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
                 if (requests_finished < config.requests) {
                     if (config.num_threads == 0) {
                         hdr_record_value(config.latency_histogram, // Histogram to record to
@@ -2725,8 +2777,8 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         long long delay = acquireTokenOrWait(config.pipeline);
 
         if (delay) {
-            int thread_id = c->thread_id;
-            int paused_clients_count = 0;
+            int64_t thread_id = c->thread_id;
+            int64_t paused_clients_count = 0;
 
             c->paused = 1;
             aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
@@ -2752,7 +2804,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     /* Initialize request when nothing was written. */
     if (c->written == 0) {
         /* Enforce upper bound to number of requests. */
-        int requests_issued = atomic_fetch_add_explicit(&config.requests_issued,
+        int64_t requests_issued = atomic_fetch_add_explicit(&config.requests_issued,
                                                         config.pipeline * c->seqlen,
                                                         memory_order_relaxed);
         if (requests_issued >= config.requests) {
@@ -2812,8 +2864,8 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  *    for arguments randomization.
  *
  * Even when cloning another client, prefix commands are applied if needed.*/
-static client createClient(char *cmd, int len, int seqlen, client from, int thread_id) {
-    int is_cluster_client = (config.cluster_mode && thread_id >= 0);
+static client createClient(char *cmd, int64_t len, int64_t seqlen, client from, int64_t thread_id) {
+    int64_t is_cluster_client = (config.cluster_mode && thread_id >= 0);
     client c = zcalloc(sizeof(struct _client));
 
     const char *ip = config.conn_info.hostip;
@@ -2822,7 +2874,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
     if (config.selected_node_count > 0) {
         /* If the user specified a list of nodes, use them in a round-robin
          * fashion. */
-        int node_idx = 0;
+        int64_t node_idx = 0;
         if (config.num_threads < config.selected_node_count)
             node_idx = (config.liveclients + 10007) % config.selected_node_count;
         else
@@ -2872,7 +2924,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
     c->prefix_pending = 0;
     if (config.conn_info.auth) {
         char *buf = NULL;
-        int len;
+        int64_t len;
         if (config.conn_info.user == NULL)
             len = valkeyFormatCommand(&buf, "AUTH %s", config.conn_info.auth);
         else
@@ -2884,7 +2936,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
 
     if (config.enable_tracking) {
         char *buf = NULL;
-        int len = valkeyFormatCommand(&buf, "CLIENT TRACKING on");
+        int64_t len = valkeyFormatCommand(&buf, "CLIENT TRACKING on");
         c->obuf = sdscatlen(c->obuf, buf, len);
         zfree(buf);
         c->prefix_pending++;
@@ -2895,14 +2947,14 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
      * time the replies are received, so if the client is reused the
      * SELECT command will not be used again. */
     if (config.conn_info.input_dbnum) {
-        c->obuf = sdscatprintf(c->obuf, "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n", (int)sdslen(config.input_dbnumstr),
+        c->obuf = sdscatprintf(c->obuf, "*2\r\n$6\r\nSELECT\r\n$%ld\r\n%s\r\n", (int64_t)sdslen(config.input_dbnumstr),
                                config.input_dbnumstr);
         c->prefix_pending++;
     }
 
     if (config.resp3) {
         char *buf = NULL;
-        int len = valkeyFormatCommand(&buf, "HELLO 3");
+        int64_t len = valkeyFormatCommand(&buf, "HELLO 3");
         c->obuf = sdscatlen(c->obuf, buf, len);
         zfree(buf);
         c->prefix_pending++;
@@ -2910,7 +2962,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
 
     if (config.read_from_replica == FROM_REPLICA_ONLY || config.read_from_replica == FROM_ALL) {
         char *buf = NULL;
-        int len;
+        int64_t len;
         len = valkeyFormatCommand(&buf, "READONLY");
         c->obuf = sdscatlen(c->obuf, buf, len);
         zfree(buf);
@@ -2923,7 +2975,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
         c->obuf = sdscatlen(c->obuf, from->obuf + from->prefixlen, sdslen(from->obuf) - from->prefixlen);
         seqlen = from->seqlen;
     } else {
-        for (int j = 0; j < config.pipeline; j++) c->obuf = sdscatlen(c->obuf, cmd, len);
+        for (int64_t j = 0; j < config.pipeline; j++) c->obuf = sdscatlen(c->obuf, cmd, len);
     }
 
     c->written = 0;
@@ -2986,9 +3038,9 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
 }
 
 static void createMissingClients(client c) {
-    int n = 0;
+    int64_t n = 0;
     while (config.liveclients < config.numclients) {
-        int thread_id = -1;
+        int64_t thread_id = -1;
         if (config.num_threads) thread_id = config.liveclients % config.num_threads;
         createClient(NULL, 0, 0, c, thread_id);
 
@@ -3010,12 +3062,12 @@ static void showLatencyReport(void) {
     const float avg = hdr_mean(config.latency_histogram) / 1000.0f;
 
     if (!config.quiet && !config.csv) {
-        printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
+        printf("%*s\r", (int)config.last_printed_bytes, " "); // ensure there is a clean line
         printf("====== %s ======\n", config.title);      
-        printf("  %d requests completed in %.2f seconds\n", config.requests_finished, (float)config.totlatency / 1000);
-        printf("  %d parallel clients\n", config.numclients);
-        printf("  %d bytes payload\n", config.datasize);
-        printf("  keep alive: %d\n", config.keepalive);
+        printf("  %ld requests completed in %.2f seconds\n", config.requests_finished, (float)config.totlatency / 1000);
+        printf("  %ld parallel clients\n", config.numclients);
+        printf("  %ld bytes payload\n", config.datasize);
+        printf("  keep alive: %ld\n", config.keepalive);
         const char *node_roles = NULL;
         if (config.read_from_replica == FROM_ALL) {
             node_roles = "cluster";
@@ -3024,19 +3076,19 @@ static void showLatencyReport(void) {
         } else {
             node_roles = "primary";
         }
-        printf("  cluster mode: %s (%d %s)\n", config.cluster_mode ? "yes" : "no", config.selected_node_count, node_roles);
-        int m;
+        printf("  cluster mode: %s (%ld %s)\n", config.cluster_mode ? "yes" : "no", config.selected_node_count, node_roles);
+        int64_t m;
         for (m = 0; m < config.selected_node_count; m++) {
             clusterNode *node = config.selected_nodes[m];
             serverConfig *cfg = node->server_config;
             if (cfg == NULL) continue;
-            printf("  node [%d] configuration:\n", m);
+            printf("  node [%ld] configuration:\n", m);
             printf("    save: %s\n", sdslen(cfg->save) ? cfg->save : "NONE");
             printf("    appendonly: %s\n", cfg->appendonly);
         }
 
         printf("  multi-thread: %s\n", (config.num_threads ? "yes" : "no"));
-        if (config.num_threads) printf("  threads: %d\n", config.num_threads);
+        if (config.num_threads) printf("  threads: %ld\n", config.num_threads);
 
         printf("\n");
         printf("Latency by percentile distribution:\n");
@@ -3109,13 +3161,13 @@ static void showLatencyReport(void) {
                    p0, p50, p95, p99, p100);
         }
     } else {
-        printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
+        printf("%*s\r", (int)config.last_printed_bytes, " "); // ensure there is a clean line
         printf("%s: %.2f requests per second, p50=%.3f msec\n", config.title, reqpersec, p50);
     }
 }
 
 static void initBenchmarkThreads(void) {
-    int i;
+    int64_t i;
     if (config.threads) freeBenchmarkThreads();
     config.threads = zcalloc(config.num_threads * sizeof(benchmarkThread *));
     for (i = 0; i < config.num_threads; i++) {
@@ -3125,11 +3177,11 @@ static void initBenchmarkThreads(void) {
 }
 
 static void startBenchmarkThreads(void) {
-    int i;
+    int64_t i;
     for (i = 0; i < config.num_threads; i++) {
         benchmarkThread *t = config.threads[i];
         if (pthread_create(&(t->thread), NULL, execBenchmarkThread, t)) {
-            fprintf(stderr, "FATAL: Failed to start thread %d.\n", i);
+            fprintf(stderr, "FATAL: Failed to start thread %ld.\n", i);
             assert(0);
         }
     }
@@ -3141,7 +3193,7 @@ static clusterSnapshot* last_info_all = NULL;
 static mstime_t snapshot_time = 0;
 /* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
  * seqlen is the number of commands included in cmd. */
-static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen) {
+static void benchmarkSequence(const char *title, char *cmd, int64_t len, int64_t seqlen) {
     client c;
 
     config.title = title;
@@ -3183,7 +3235,7 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
         config.last_time_ns = 0;
     }
 
-    int thread_id = config.num_threads > 0 ? 0 : -1;
+    int64_t thread_id = config.num_threads > 0 ? 0 : -1;
     c = createClient(cmd, len, seqlen, NULL, thread_id);
     createMissingClients(c);
     
@@ -3237,7 +3289,7 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
 }
 
 /* Benchmark a single RESP-encoded command of length len. */
-static void benchmark(const char *title, char *cmd, int len) {
+static void benchmark(const char *title, char *cmd, int64_t len) {
     benchmarkSequence(title, cmd, len, 1);
 }
 
@@ -3248,11 +3300,11 @@ static void measureBaselineLatency(void) {
     }
     
     /* Save current configuration */
-    int saved_clients = config.numclients;
-    int saved_threads = config.num_threads;
+    int64_t saved_clients = config.numclients;
+    int64_t saved_threads = config.num_threads;
     long long saved_requests = config.requests;
-    int saved_quiet = config.quiet;
-    int saved_csv = config.csv;
+    int64_t saved_quiet = config.quiet;
+    int64_t saved_csv = config.csv;
     const char *saved_title = config.title;
     
     /* Set to single-threaded, single-client for pure network measurement */
@@ -3293,7 +3345,7 @@ static void measureBaselineLatency(void) {
 
 /* Thread functions. */
 
-static benchmarkThread *createBenchmarkThread(int index) {
+static benchmarkThread *createBenchmarkThread(int64_t index) {
     benchmarkThread *thread = zcalloc(sizeof(*thread));
     if (thread == NULL) return NULL;
     thread->index = index;
@@ -3312,7 +3364,7 @@ static void freeBenchmarkThread(benchmarkThread *thread) {
 }
 
 static void freeBenchmarkThreads(void) {
-    int i = 0;
+    int64_t i = 0;
     for (; i < config.num_threads; i++) {
         benchmarkThread *thread = config.threads[i];
         if (thread) freeBenchmarkThread(thread);
@@ -3338,7 +3390,7 @@ static clusterNode *createClusterNode(char *ip, int port) {
     node->flags = 0;
     node->replicate = NULL;
     node->replicas_count = 0;
-    node->slots = zcalloc(CLUSTER_SLOTS * sizeof(int));
+    node->slots = zcalloc(CLUSTER_SLOTS * sizeof(int64_t));
     node->slots_count = 0;
     node->updated_slots = NULL;
     node->updated_slots_count = 0;
@@ -3360,7 +3412,7 @@ static void freeClusterNode(clusterNode *node) {
 }
 
 static void freeClusterNodes(void) {
-    int i = 0;
+    int64_t i = 0;
     for (; i < config.cluster_node_count; i++) {
         clusterNode *n = config.cluster_nodes[i];
         if (n) freeClusterNode(n);
@@ -3371,19 +3423,19 @@ static void freeClusterNodes(void) {
     config.cluster_primary_nodes = NULL;
 }
 
-static clusterNode **addClusterNode(clusterNode *node, int is_primary) {
-    int selected =  isSelected(is_primary);
+static clusterNode **addClusterNode(clusterNode *node, int64_t is_primary) {
+    int64_t selected =  isSelected(is_primary);
     node->is_replica = !is_primary;
     node->selected = selected;
     printf("Adding cluster node (%s) %s %s:%d\n", (selected? "selected": "not selected"), node->name, node->ip, node->port);
     if (!config.cluster_mode) {
         node->slots_count = CLUSTER_SLOTS;
-        for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
+        for (int64_t slot = 0; slot < CLUSTER_SLOTS; slot++) {
             node->slots[slot] = slot;
         }
     }
     // verify node ip + port is unique
-    for (int i = 0; i < config.cluster_node_count; i++) {
+    for (int64_t i = 0; i < config.cluster_node_count; i++) {
         clusterNode *n = config.cluster_nodes[i];
         if (strcmp(n->ip, node->ip) == 0 && n->port == node->port) {
             printf("Node %s:%d already exists, skipping name=%s, replicate=%s <==> n_name=%s, n_replicate=%s\n", node->ip, node->port, node->name, node->replicate, n->name, n->replicate);
@@ -3391,7 +3443,7 @@ static clusterNode **addClusterNode(clusterNode *node, int is_primary) {
             return config.cluster_nodes;
         }
     }
-    int count = config.cluster_node_count + 1;
+    int64_t count = config.cluster_node_count + 1;
     config.cluster_nodes = zrealloc(config.cluster_nodes, count * sizeof(clusterNode *));
     assert(config.cluster_nodes != NULL);
     node->ctx = getValkeyContext(config.ct, node->ip, node->port);
@@ -3417,11 +3469,11 @@ int isElastiCacheEndpoint(const char *hostname) {
     return 1;
 }
 /* CMD (Cluster Mode Disabled) configuration prototypes */
-static int fetchCMDNodesConfiguration(void);
-static int setupElastiCacheCMDNodes(void);
+static int64_t fetchCMDNodesConfiguration(void);
+static int64_t setupElastiCacheCMDNodes(void);
 static sds constructElastiCacheReaderEndpoint(const char *hostname);
-static int setupOpenSourceCMDPrimary(valkeyReply *info_reply);
-static int setupOpenSourceCMDReplica(valkeyReply *info_reply);
+static int64_t setupOpenSourceCMDPrimary(valkeyReply *info_reply);
+static int64_t setupOpenSourceCMDReplica(valkeyReply *info_reply);
 // static serverConfig *getServerConfigSafe(enum valkeyConnectionType ct, const char *host, int port);
 
 /**
@@ -3438,8 +3490,8 @@ static int setupOpenSourceCMDReplica(valkeyReply *info_reply);
  * 
  * Returns 1 on success, 0 on failure.
  */
-static int fetchCMDNodesConfiguration(void) {
-    int success = 1;
+static int64_t fetchCMDNodesConfiguration(void) {
+    int64_t success = 1;
     valkeyContext *ctx = NULL;
     valkeyReply *reply = NULL;
     
@@ -3504,14 +3556,14 @@ cleanup:
  * 
  * ElastiCache exposes replicas via DNS load-balanced reader endpoint, not individual IPs.
  */
-static int setupElastiCacheCMDNodes(void) {
+static int64_t setupElastiCacheCMDNodes(void) {
     /* Add primary node */
     clusterNode *primary = createClusterNode((char *)config.conn_info.hostip, 
                                               config.conn_info.hostport);
     if (!primary) return 0;
     
     primary->name = sdsnew("primary");
-    for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
+    for (int64_t slot = 0; slot < CLUSTER_SLOTS; slot++) {
         primary->slots[primary->slots_count++] = slot;
     }
 
@@ -3557,7 +3609,7 @@ static int setupElastiCacheCMDNodes(void) {
     reader->flags = 1; /* Mark as replica endpoint */
     reader->replicate = sdsnew(primary->name);
     
-    for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
+    for (int64_t slot = 0; slot < CLUSTER_SLOTS; slot++) {
         reader->slots[reader->slots_count++] = slot;
     }
 
@@ -3612,14 +3664,14 @@ static sds constructElastiCacheReaderEndpoint(const char *hostname) {
  * INFO REPLICATION format:
  * slave0:ip=10.21.0.202,port=6379,state=online,offset=121817956112,lag=0,type=replica
  */
-static int setupOpenSourceCMDPrimary(valkeyReply *info_reply) {
+static int64_t setupOpenSourceCMDPrimary(valkeyReply *info_reply) {
     /* Add primary node */
     clusterNode *primary = createClusterNode((char *)config.conn_info.hostip, 
                                               config.conn_info.hostport);
     if (!primary) return 0;
     
     primary->name = sdsnew("primary");
-    for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
+    for (int64_t slot = 0; slot < CLUSTER_SLOTS; slot++) {
         primary->slots[primary->slots_count++] = slot;
     }
     
@@ -3631,7 +3683,7 @@ static int setupOpenSourceCMDPrimary(valkeyReply *info_reply) {
     /* Parse replicas from INFO REPLICATION: slave0:ip=X,port=Y,... */
     char *info = info_reply->str;
     char *line = info;
-    int replica_idx = 0;
+    int64_t replica_idx = 0;
     
     while (line) {
         /* Look for slave lines: "slave0:ip=..." */
@@ -3660,7 +3712,7 @@ static int setupOpenSourceCMDPrimary(valkeyReply *info_reply) {
                     port = atoi(port_start);
                     
                     /* Check if replica is online */
-                    int is_online = 1;
+                    int64_t is_online = 1;
                     if (state_start) {
                         state_start += 6;  /* Skip "state=" */
                         char *state_end = strchr(state_start, ',');
@@ -3678,15 +3730,15 @@ static int setupOpenSourceCMDPrimary(valkeyReply *info_reply) {
                         clusterNode *replica = createClusterNode(sdsnew(ip), port);
                         if (!replica) return 0;
                         
-                        replica->name = sdscatprintf(sdsempty(), "replica-%d", replica_idx);
+                        replica->name = sdscatprintf(sdsempty(), "replica-%ld", replica_idx);
                         replica->flags = 1;
                         replica->replicate = sdsnew(primary->name);
                         
-                        for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
+                        for (int64_t slot = 0; slot < CLUSTER_SLOTS; slot++) {
                             replica->slots[replica->slots_count++] = slot;
                         }
                         
-                        printf("Found replica %d: %s:%d (state=%s)\n", replica_idx, ip, port, state);
+                        printf("Found replica %ld: %s:%d (state=%s)\n", replica_idx, ip, port, state);
                         
                         if (!addClusterNode(replica, 0)) {
                             freeClusterNode(replica);
@@ -3718,7 +3770,7 @@ static int setupOpenSourceCMDPrimary(valkeyReply *info_reply) {
  * master_host:172.31.36.220
  * master_port:6379
  */
-static int setupOpenSourceCMDReplica(valkeyReply *info_reply) {
+static int64_t setupOpenSourceCMDReplica(valkeyReply *info_reply) {
     char *info = info_reply->str;
     
     /* Parse master host and port */
@@ -3735,22 +3787,22 @@ static int setupOpenSourceCMDReplica(valkeyReply *info_reply) {
     
     sscanf(master_host_line, "master_host:%255s", primary_ip);
     sscanf(master_port_line, "master_port:%d", &primary_port);
-    
+
     /* Add primary node */
     clusterNode *primary = createClusterNode(sdsnew(primary_ip), primary_port);
     if (!primary) return 0;
     
     primary->name = sdsnew("primary");
-    for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
+    for (int64_t slot = 0; slot < CLUSTER_SLOTS; slot++) {
         primary->slots[primary->slots_count++] = slot;
     }
     if (!addClusterNode(primary, 1)) {
         freeClusterNode(primary);
         return 0;
     }
-    
+
     printf("Found primary: %s:%d\n", primary_ip, primary_port);
-    
+
     /* Add current replica node */
     clusterNode *replica = createClusterNode((char *)config.conn_info.hostip,
                                               config.conn_info.hostport);
@@ -3760,7 +3812,7 @@ static int setupOpenSourceCMDReplica(valkeyReply *info_reply) {
     replica->flags = 1;
     replica->replicate = sdsnew(primary->name);
     
-    for (int slot = 0; slot < CLUSTER_SLOTS; slot++) {
+    for (int64_t slot = 0; slot < CLUSTER_SLOTS; slot++) {
         replica->slots[replica->slots_count++] = slot;
     }
     if (!addClusterNode(replica, 0)) {
@@ -3783,8 +3835,8 @@ static int setupOpenSourceCMDReplica(valkeyReply *info_reply) {
  * - Master: f5f9bdad... 172.31.36.220:6379@1122 myself,master - 0 0 1 connected 0-16383
  * - Replica: ebdd1dc9... 172.31.20.20:6379@1122 slave f5f9bdad... 0 1761043963894 1 connected
  */
-static int fetchClusterConfiguration(void) {
-    int success = 1;
+static int64_t fetchClusterConfiguration(void) {
+    int64_t success = 1;
     valkeyContext *ctx = NULL;
     valkeyReply *reply = NULL;
     dict *nodes = NULL;
@@ -3823,10 +3875,10 @@ static int fetchClusterConfiguration(void) {
     while (line != NULL) {
         /* Parse: <id> <ip:port@cport> <flags> <master-id> <ping> <pong> <epoch> <state> <slots...> */
         char node_id[128], addr[256], flags[256], master_id[128];
-        int ping_sent, pong_recv, config_epoch;
+        int64_t ping_sent, pong_recv, config_epoch;
         char link_state[32];
         
-        int parsed = sscanf(line, "%127s %255s %255s %127s %d %d %d %31s",
+        int64_t parsed = sscanf(line, "%127s %255s %255s %127s %ld %ld %ld %31s",
                            node_id, addr, flags, master_id, 
                            &ping_sent, &pong_recv, &config_epoch, link_state);
         
@@ -3852,8 +3904,8 @@ static int fetchClusterConfiguration(void) {
         int port = atoi(colon + 1);
         
         /* Determine if this is a master or replica from flags */
-        int is_master = (strstr(flags, "master") != NULL);
-        int is_slave = (strstr(flags, "slave") != NULL);
+        int64_t is_master = (strstr(flags, "master") != NULL);
+        int64_t is_slave = (strstr(flags, "slave") != NULL);
         
         if (!is_master && !is_slave) {
             printf("Skipping node with neither master nor slave flag: %s\n", node_id);
@@ -3891,7 +3943,7 @@ static int fetchClusterConfiguration(void) {
             
             /* Parse slot ranges from remaining tokens - need to find them after the 8th field */
             char *slots_start = line;
-            int field_count = 0;
+            int64_t field_count = 0;
             /* Skip to the 9th field (after link_state) */
             while (*slots_start && field_count < 8) {
                 if (*slots_start == ' ') {
@@ -3971,9 +4023,9 @@ cleanup:
 
 /* Request the current cluster slots configuration by calling CLUSTER SLOTS
  * and atomically update the slots after a successful reply. */
-static int fetchClusterSlotsConfiguration(client c) {
+static int64_t fetchClusterSlotsConfiguration(client c) {
     UNUSED(c);
-    int success = 1, is_fetching_slots = 0, last_update = 0;
+    int64_t success = 1, is_fetching_slots = 0, last_update = 0;
     size_t i, j;
 
     last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
@@ -3989,7 +4041,7 @@ static int fetchClusterSlotsConfiguration(client c) {
     fprintf(stderr, "WARNING: Cluster slots configuration changed, fetching new one...\n");
     const char *errmsg = "Failed to update cluster slots configuration";
 
-    /* printf("[%d] fetchClusterSlotsConfiguration\n", c->thread_id); */
+    /* printf("[%ld] fetchClusterSlotsConfiguration\n", c->thread_id); */
     dict *nodes = dictCreate(&dtype);
     // valkeyContext *ctx = NULL;
     for (i = 0; i < (size_t)config.cluster_node_count; i++) {
@@ -4021,7 +4073,7 @@ static int fetchClusterSlotsConfiguration(client c) {
         valkeyReply *r = reply->element[i];
         assert(r->type == VALKEY_REPLY_ARRAY);
         assert(r->elements >= 3);
-        int from, to, slot;
+        int64_t from, to, slot;
         from = r->element[0]->integer;
         to = r->element[1]->integer;
         size_t start, end;
@@ -4053,7 +4105,7 @@ static int fetchClusterSlotsConfiguration(client c) {
             }
             sdsfree(name);
             clusterNode *node = dictGetVal(entry);
-            if (node->updated_slots == NULL) node->updated_slots = zcalloc(CLUSTER_SLOTS * sizeof(int));
+            if (node->updated_slots == NULL) node->updated_slots = zcalloc(CLUSTER_SLOTS * sizeof(int64_t));
             for (slot = from; slot <= to; slot++) node->updated_slots[node->updated_slots_count++] = slot;
         }
     }
@@ -4072,7 +4124,7 @@ static void updateClusterSlotsConfiguration(void) {
     pthread_mutex_lock(&config.is_updating_slots_mutex);
     atomic_store_explicit(&config.is_updating_slots, 1, memory_order_relaxed);
 
-    int i;
+    int64_t i;
     for (i = 0; i < config.cluster_node_count; i++) {
         clusterNode *node = config.cluster_nodes[i];
         if (node->updated_slots != NULL) {
@@ -4090,9 +4142,9 @@ static void updateClusterSlotsConfiguration(void) {
 }
 
 /* Generate random data for the benchmark. See #7196. */
-static void genBenchmarkRandomData(char *data, int count) {
+static void genBenchmarkRandomData(char *data, int64_t count) {
     static uint32_t state = 1234;
-    int i = 0;
+    int64_t i = 0;
 
     while (count--) {
         state = (state * 1103515245 + 12345);
@@ -4103,7 +4155,7 @@ static void genBenchmarkRandomData(char *data, int count) {
 /* Parse tag distributions from command line */
 static void parseTagDistributions(const char *distributions_str) {
     sds str = sdsnew(distributions_str);
-    int count = 0;
+    int64_t count = 0;
     char *token;
     double cumulative = 0.0;
     
@@ -4122,7 +4174,7 @@ static void parseTagDistributions(const char *distributions_str) {
     config.search.curr_conf.n_dists = count;
     
     /* Second pass: parse distributions */
-    int i = 0;
+    int64_t i = 0;
     token = strtok_r(str, ",", &saveptr);
     while (token) {
         char *colon = strchr(token, ':');
@@ -4157,10 +4209,10 @@ static sds selectTagByDistribution(void) {
     }
     
     sds tags = sdsempty();
-    int first = 1;
+    int64_t first = 1;
     
     /* Each tag has an independent probability of being included */
-    for (int i = 0; i < config.search.curr_conf.n_dists; i++) {
+    for (int64_t i = 0; i < config.search.curr_conf.n_dists; i++) {
         double random_percent = ((double)rand() / RAND_MAX) * 100.0;
         
         /* Include this tag if random falls within its percentage */
@@ -4216,16 +4268,16 @@ void setDefaultSearchConfig(void) {
     config.search.curr_conf.tag_dists = NULL;
     config.search.curr_conf.n_dists = 0;
     config.search.curr_conf.tag_filter = NULL;
-    config.search.metric = sdsnew("L2");
+    config.search.metric = sdsnew("COSINE");
     config.search.algorithm = sdsnew("hnsw"); // Default algorithm
     config.search.nocontent = 0; // exclude content by default
     config.search.localonly = 0; // Default LOCALONLY option
 }
 /* Returns number of consumed options. */
 int parseOptions(int argc, char **argv) {
-    int i;
-    int lastarg;
-    int exit_status = 1;
+    int64_t i;
+    int64_t lastarg;
+    int64_t exit_status = 1;
     char *tls_usage;
     char *rdma_usage;
     char *search_usage_part1;
@@ -4244,7 +4296,7 @@ int parseOptions(int argc, char **argv) {
             exit(0);
         } else if (!strcmp(argv[i], "-n")) {
             if (lastarg) goto invalid;
-            config.requests = atoi(argv[++i]);
+            config.requests = strtoll(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "-k")) {
             if (lastarg) goto invalid;
             config.keepalive = atoi(argv[++i]);
@@ -4301,7 +4353,7 @@ int parseOptions(int argc, char **argv) {
                 if (*p < '0' || *p > '9') goto invalid;
             }
             config.replace_placeholders = 1;
-            config.keyspacelen = atoi(next);
+            config.keyspacelen = strtoll(next, NULL, 10);
             if (config.keyspacelen < 0) config.keyspacelen = 0;
         } else if (!strcmp(argv[i], "--sequential")) {
             config.sequential_replacement = 1;
@@ -4318,7 +4370,7 @@ int parseOptions(int argc, char **argv) {
                             "We now immediately exit on error to avoid false results.\n");
         } else if (!strcmp(argv[i], "--seed")) {
             if (lastarg) goto invalid;
-            int rand_seed = atoi(argv[++i]);
+            int64_t rand_seed = atoi(argv[++i]);
             srandom(rand_seed);
             init_genrand64(rand_seed);
         } else if (!strcmp(argv[i], "-t")) {
@@ -4445,7 +4497,7 @@ int parseOptions(int argc, char **argv) {
             if (lastarg) goto invalid;
             config.search.vector_dim = atoi(argv[++i]);
             if (config.search.vector_dim <= VECTOR_NUM_RAND_DIM) {
-                fprintf(stderr, "Invalid vector dimension: %d\n", config.search.vector_dim);
+                fprintf(stderr, "Invalid vector dimension: %ld\n", config.search.vector_dim);
                 goto invalid;
             }
         } else if (!strcmp(argv[i], "--ef-search")) {
@@ -4840,9 +4892,9 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     UNUSED(eventLoop);
     UNUSED(id);
     benchmarkThread *thread = (benchmarkThread *)clientData;
-    int liveclients = atomic_load_explicit(&config.liveclients, memory_order_relaxed);
-    int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
-    int previous_requests_finished = atomic_load_explicit(&config.previous_requests_finished, memory_order_relaxed);
+    int64_t liveclients = atomic_load_explicit(&config.liveclients, memory_order_relaxed);
+    int64_t requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
+    int64_t previous_requests_finished = atomic_load_explicit(&config.previous_requests_finished, memory_order_relaxed);
     long long current_tick = mstime();
 
     if (liveclients == 0 && requests_finished != config.requests) {
@@ -4860,7 +4912,7 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         return SHOW_THROUGHPUT_INTERVAL;
     }
     if (config.idlemode == 1) {
-        printf("clients: %d\r", config.liveclients);
+        printf("clients: %ld\r", config.liveclients);
         fflush(stdout);
         return SHOW_THROUGHPUT_INTERVAL;
     }
@@ -4870,8 +4922,8 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     const float instantaneous_rps = (float)(requests_finished - previous_requests_finished) / instantaneous_dt;
     config.previous_tick = current_tick;
     atomic_store_explicit(&config.previous_requests_finished, requests_finished, memory_order_relaxed);
-    printf("%*s\r", config.last_printed_bytes, " "); /* ensure there is a clean line */
-    int printed_bytes =
+    printf("%*s\r", (int)config.last_printed_bytes, " "); /* ensure there is a clean line */
+    int64_t printed_bytes =
         printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)\r", config.title, instantaneous_rps, rps,
                hdr_mean(config.current_sec_latency_histogram) / 1000.0f, hdr_mean(config.latency_histogram) / 1000.0f);
     config.last_printed_bytes = printed_bytes;
@@ -4880,16 +4932,16 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     return SHOW_THROUGHPUT_INTERVAL;
 }
 
-char *generateFunctionScript(uint32_t num_functions, int with_keys) {
+char *generateFunctionScript(uint32_t num_functions, int64_t with_keys) {
     /* 64K buffer to hold script code */
     const size_t buffer_len = 64 * 1024;
     char *buffer = zcalloc(buffer_len);
     memset(buffer, 0, buffer_len);
 
-    int written = snprintf(buffer, buffer_len, "#!lua name=benchlib\n");
+    int64_t written = snprintf(buffer, buffer_len, "#!lua name=benchlib\n");
     while (num_functions > 0 && (buffer_len - written) > 0) {
         assert(buffer_len - written > 0);
-        int n = 0;
+        int64_t n = 0;
         if (with_keys) {
             n = snprintf(buffer + written, buffer_len - written,
                          "local function foo%u(keys, args)\nreturn keys[0]\nend\n",
@@ -4921,7 +4973,7 @@ char *generateFunctionScript(uint32_t num_functions, int with_keys) {
  * switch, or if all the tests are selected (no -t passed by user). */
 int test_is_selected(const char *name) {
     char buf[256];
-    int l = strlen(name);
+    int64_t l = strlen(name);
 
     if (config.tests == NULL) return 1;
     buf[0] = ',';
@@ -4941,9 +4993,9 @@ static void *zcalloc_wrapper(size_t nmemb, size_t size) {
 }
 
 int main(int argc, char **argv) {
-    int i;
+    int64_t i;
     char *data, *cmd, *tag;
-    int len;
+    int64_t len;
     memset(&config, 0, sizeof(config));
     config.cluster_mode = -1; /* Unknown until detected */
     client c;
@@ -4971,7 +5023,7 @@ int main(int argc, char **argv) {
     config.requests = 100000;
     config.liveclients = 0;
     config.el = aeCreateEventLoop(1024 * 10);
-    aeCreateTimeEvent(config.el, 1, showThroughput, NULL, NULL);
+    aeCreateTimeEvent(config.el, 1000, showThroughput, NULL, NULL);
     config.keepalive = 1;
     config.datasize = 3;
     config.pipeline = 1;
@@ -5191,11 +5243,11 @@ int main(int argc, char **argv) {
             assert(0);
         }
         if (config.selected_node_count == 0) {
-            fprintf(stderr, "Invalid cluster: %d node(s).\n", config.selected_node_count);
+            fprintf(stderr, "Invalid cluster: %ld node(s).\n", config.selected_node_count);
             assert(0);
         }       
     } else if (isElastiCacheEndpoint(config.conn_info.hostip)) {
-        int res = setupElastiCacheCMDNodes();
+        int64_t res = setupElastiCacheCMDNodes();
         if (!res) {
             fprintf(stderr,
                     "Failed to fetch cluster configuration from "
@@ -5204,7 +5256,7 @@ int main(int argc, char **argv) {
             assert(0);
         }
     } else {
-        int res = fetchCMDNodesConfiguration();
+        int64_t res = fetchCMDNodesConfiguration();
         if (!res) {
             if (config.ct != VALKEY_CONN_UNIX) {
                 fprintf(stderr,
@@ -5228,16 +5280,16 @@ int main(int argc, char **argv) {
     } else {
         node_roles = "primary";
     }
-    printf("Cluster has %d %s selected nodes:\n\n", config.selected_node_count, node_roles);
+    printf("Cluster has %ld %s selected nodes:\n\n", config.selected_node_count, node_roles);
     i = 0;
     for (; i < config.selected_node_count; i++) {
         clusterNode *node = config.selected_nodes[i];
         if (!node) {
-            fprintf(stderr, "Invalid cluster node #%d\n", i);
+            fprintf(stderr, "Invalid cluster node #%ld\n", i);
             assert(0);
         }
         const char *node_type = (node->replicate == NULL ? "Primary" : "Replica");
-        printf("Node %d(%s): ", i, node_type);
+        printf("Node %ld(%s): ", i, node_type);
         if (node->name) printf("%s ", node->name);
         printf("%s:%d\n", node->ip, node->port);
         safeGetServerConfig(config.ct, node->ip, node->port, node->server_config);
@@ -5265,8 +5317,8 @@ int main(int argc, char **argv) {
     }
 
     if (config.idlemode) {
-        printf("Creating %d idle connections and waiting forever (Ctrl+C when done)\n", config.numclients);
-        int thread_id = -1, use_threads = (config.num_threads > 0);
+        printf("Creating %ld idle connections and waiting forever (Ctrl+C when done)\n", config.numclients);
+        int64_t thread_id = -1, use_threads = (config.num_threads > 0);
         if (use_threads) {
             thread_id = 0;
             initBenchmarkThreads();
@@ -5318,9 +5370,9 @@ int main(int argc, char **argv) {
          *
          *     [N] command args [ ";" [N] command args [...] ]
          */
-        int start = 0;   /* Argument index where the current command starts. */
-        int repeat = 1;  /* Number of times to repeat the current command. */
-        int seq_len = 0; /* Total number of commands in the sequence. */
+        int64_t start = 0;   /* Argument index where the current command starts. */
+        int64_t repeat = 1;  /* Number of times to repeat the current command. */
+        int64_t seq_len = 0; /* Total number of commands in the sequence. */
         sds cmd_seq = sdsempty();
         for (i = 0; i <= argc; i++) {
             if (i == start && sds_args[i][0] >= '1' && sds_args[i][0] <= '9') {
@@ -5334,7 +5386,7 @@ int main(int argc, char **argv) {
                 len = valkeyFormatCommandArgv(&cmd, i - start,
                                               (const char **)sds_args + start,
                                               argvlen + start);
-                for (int j = 0; j < repeat; j++) {
+                for (int64_t j = 0; j < repeat; j++) {
                     cmd_seq = sdscatlen(cmd_seq, cmd, len);
                 }
                 seq_len += repeat;
@@ -5349,7 +5401,7 @@ int main(int argc, char **argv) {
                                          &num_parts);
                 sds newarg = parts[0];
                 parts[0] = NULL; /* prevent it from being freed below */
-                for (int j = 1; j < num_parts; j++) {
+                for (int64_t j = 1; j < num_parts; j++) {
                     char data[config.datasize];
                     genBenchmarkRandomData(data, config.datasize);
                     newarg = sdscatlen(newarg, data, config.datasize);
@@ -5418,8 +5470,8 @@ int main(int argc, char **argv) {
 
 
             /* Override vector dimension from dataset */
-            if (config.search.vector_dim != (int)info.dim) {
-                fprintf(stderr, "WARNING: Overriding --vector-dim %d with dataset dim %d\n",
+            if (config.search.vector_dim != (int64_t)info.dim) {
+                fprintf(stderr, "WARNING: Overriding --vector-dim %ld with dataset dim %u\n",
                         config.search.vector_dim, info.dim);
                 config.search.vector_dim = info.dim;
             }
@@ -5454,12 +5506,12 @@ int main(int argc, char **argv) {
                config.engine_type == ENGINE_TYPE_MEMORYDB ? "MemoryDB" : config.engine_type == ENGINE_TYPE_ELASTICACHE_VALKEY ? "EC Valkey" : "OSS",
                cluster_mode_str);
        
-        // int num_indexes = 1;
+        // int64_t num_indexes = 1;
         // char* index_names[2] = {config.search.name, NULL};
         // sds flat_index = sdsnew(config.search.name);        
         // flat_index = sdscat(flat_index, "_flat");               
         // const char* index_names[2] = {config.search.name, flat_index};
-        // int num_indexes = 2;
+        // int64_t num_indexes = 2;
 
         createDefaultSearchIndexes();
         sleep(2); /* wait a bit before checking index status */
@@ -5480,7 +5532,7 @@ int main(int argc, char **argv) {
             /* Build vector ID mappings by scanning cluster for pre-existing vectors */
             /* Note: New vectors inserted during benchmark will update the mapping in real-time */
             printf("Building vector ID to cluster tag mappings from existing cluster data...\n");
-            int scan_result = buildVectorIdMappings(config.cluster_mode,
+            int64_t scan_result = buildVectorIdMappings(config.cluster_mode,
                                                 config.search.prefix,
                                                 config.selected_nodes,
                                                 config.selected_node_count,
@@ -5497,13 +5549,13 @@ int main(int argc, char **argv) {
     if (config.runtime_config_file) {
         config.runtime_config_ctx = loadRuntimeConfig(config.runtime_config_file);
         if (config.runtime_config_ctx) {
-            int applied = applyRuntimeConfig(config.runtime_config_ctx,
+            int64_t applied = applyRuntimeConfig(config.runtime_config_ctx,
                                             config.cluster_node_count,
                                             config.cluster_nodes,
                                             config.ct,
                                             !config.quiet);
             if (applied > 0 && !config.quiet) {
-                printf("Successfully applied %d runtime configuration settings\n", applied);
+                printf("Successfully applied %ld runtime configuration settings\n", applied);
             } else if (applied < 0) {
                 fprintf(stderr, "Warning: Failed to apply runtime configuration\n");
             }
@@ -5530,8 +5582,8 @@ int main(int argc, char **argv) {
          */
         
         /* Parse custom ranges or use defaults */
-        int client_min, client_max, thread_min, thread_max;
-        int ef_search_min, ef_search_max, pipeline_min, pipeline_max;
+        int64_t client_min, client_max, thread_min, thread_max;
+        int64_t ef_search_min, ef_search_max, pipeline_min, pipeline_max;
         
         parseOptimizeRange(config.optimize_client_range, &client_min, &client_max, 1, 1500);
         parseOptimizeRange(config.optimize_thread_range, &thread_min, &thread_max, 0, 16);
@@ -5550,7 +5602,7 @@ int main(int argc, char **argv) {
         }
         
         /* Parse and add user-specified constraints */
-        for (int j = 0; j < config.num_optimize_constraints; j++) {
+        for (int64_t j = 0; j < config.num_optimize_constraints; j++) {
             parseOptimizerConstraint(config.optimizer, config.optimize_constraints[j]);
         }
         
@@ -5575,23 +5627,23 @@ int main(int argc, char **argv) {
         
         printf("\n=== Starting Adaptive Load Optimization ===\n");
         printf("Objective: %s\n", config.optimize_objective);
-        printf("Constraints: %d specified\n", config.num_optimize_constraints);
-        printf("Max iterations: %d\n", config.optimize_max_iterations);
-        printf("Min requests per run: %d\n", config.optimize_min_requests);
-        printf("User requested requests: %d\n\n", config.requests);
+        printf("Constraints: %ld specified\n", config.num_optimize_constraints);
+        printf("Max iterations: %ld\n", config.optimize_max_iterations);
+        printf("Min requests per run: %ld\n", config.optimize_min_requests);
+        printf("User requested requests: %ld\n\n", config.requests);
         
         /* Save original config.requests to restore after optimization */
-        int original_requests = config.requests;
+        int64_t original_requests = config.requests;
         
         status_t opt_status = STATUS_OK;
-        int iteration = 0;
+        int64_t iteration = 0;
         char *cmd_opt;
-        int len_opt;
+        int64_t len_opt;
         /* Run the benchmark (only vec-query for now) */
         assert(config.use_search && test_is_selected("vec-query"));
         size_t keyspacelen_before = config.keyspacelen;
         if (config.use_dataset) {
-            config.keyspacelen = (int)config.dataset_num_queries;
+            config.keyspacelen = (int64_t)config.dataset_num_queries;
         }
         len_opt = createSearchCmdTemplate(&cmd_opt);
         
@@ -5602,7 +5654,7 @@ int main(int argc, char **argv) {
             iteration++;
             
             /* Get current configuration from optimizer */
-            int opt_config[3];  /* clients, threads, ef_search (pipeline commented out) */
+            int64_t opt_config[3];  /* clients, threads, ef_search (pipeline commented out) */
             optimizer_get_current_config(config.optimizer, opt_config, 3);
             
             /* Apply configuration */
@@ -5614,8 +5666,8 @@ int main(int argc, char **argv) {
             // /* Temporarily override requests with optimize_min_requests for faster iterations */
             // config.requests = config.optimize_min_requests;
             
-            printf("\n--- Iteration %d ---\n", iteration);
-            printf("Config: clients=%d threads=%d pipeline=%d ef_search=%d requests=%d\n",
+            printf("\n--- Iteration %ld ---\n", iteration);
+            printf("Config: clients=%ld threads=%ld pipeline=%ld ef_search=%ld requests=%ld\n",
                    config.numclients, config.num_threads, config.pipeline, config.search.ef_search, config.requests);
             
             
@@ -5661,15 +5713,15 @@ int main(int argc, char **argv) {
             printf("P99 Latency: %.3fms\n", best->metrics[METRIC_P99_LATENCY]);
             printf("Recall Avg: %.4f\n", best->metrics[METRIC_RECALL_AVG]);
             printf("\nParameters:\n");
-            for (int j = 0; j < optimizer_get_param_count(config.optimizer); j++) {
-                printf("  %s = %d\n", optimizer_get_param_name(config.optimizer, j), 
+            for (int64_t j = 0; j < optimizer_get_param_count(config.optimizer); j++) {
+                printf("  %s = %ld\n", optimizer_get_param_name(config.optimizer, j), 
                        best->param_values[j]);
             }
             
             /* Apply best configuration for final run if user requested full benchmark */
             if (original_requests > config.optimize_min_requests) {
                 printf("\n=== Running Final Benchmark with Best Config ===\n");
-                printf("Using %d requests (user requested value)\n\n", original_requests);
+                printf("Using %ld requests (user requested value)\n\n", original_requests);
                 
                 /* Apply best configuration */
                 config.numclients = best->param_values[0];
@@ -5682,10 +5734,10 @@ int main(int argc, char **argv) {
                 if (config.use_search && test_is_selected("vec-query")) {
                     size_t keyspacelen_before = config.keyspacelen;
                     if (config.use_dataset) {
-                        config.keyspacelen = (int)config.dataset_num_queries;
+                        config.keyspacelen = (int64_t)config.dataset_num_queries;
                     }
                     char *cmd_final;
-                    int len_final = createSearchCmdTemplate(&cmd_final);
+                    int64_t len_final = createSearchCmdTemplate(&cmd_final);
                     benchmark("VEC-QUERY (final)", cmd_final, len_final);
                     zfree(cmd_final);
                     config.keyspacelen = keyspacelen_before;
@@ -5785,13 +5837,13 @@ int main(int argc, char **argv) {
             if (test_is_selected("vec-load")) {
                 size_t prev_num_requests = config.requests;
                 size_t prev_keyspacelen_before = config.keyspacelen;
-                int prev_sequential_replacement = config.sequential_replacement; /* force sequential keys for ground truth ingestion */
+                int64_t prev_sequential_replacement = config.sequential_replacement; /* force sequential keys for ground truth ingestion */
                 config.requests = config.dataset_num_vectors;
                 config.sequential_replacement = 1;
 
                 if (config.use_dataset/* && config.cluster_mode*/) {
                     config.requests = config.dataset_num_vectors - getClusterTagMapCount(&cluster_tag_map);
-                    config.keyspacelen = (int)config.dataset_num_vectors;
+                    config.keyspacelen = (int64_t)config.dataset_num_vectors;
                 } 
 
                 /* Ingest ground truth vectors from reserved range */
@@ -5821,7 +5873,7 @@ int main(int argc, char **argv) {
                 size_t keyspacelen_before = config.keyspacelen;
                 if (config.use_dataset) {
                     // For dataset mode, the ground truth size is the number of vectors in the dataset
-                    config.keyspacelen = (int)config.dataset_num_queries;
+                    config.keyspacelen = (int64_t)config.dataset_num_queries;
                 }
                 /* Use custom vector benchmark function */
                 len = createSearchCmdTemplate(&cmd);
@@ -5977,18 +6029,18 @@ int main(int argc, char **argv) {
             zfree(script);
 
             char **cmd_argv = zcalloc(sizeof(char *) * (config.num_keys_in_fcall + 3));
-            int ret = asprintf(&(cmd_argv[0]), "fcall");
+            int64_t ret = asprintf(&(cmd_argv[0]), "fcall");
             UNUSED(ret);
             ret = asprintf(&(cmd_argv[1]), "foo1");
             UNUSED(ret);
-            ret = asprintf(&(cmd_argv[2]), "%d", config.num_keys_in_fcall);
+            ret = asprintf(&(cmd_argv[2]), "%ld", config.num_keys_in_fcall);
             UNUSED(ret);
-            for (int i = 0; i < config.num_keys_in_fcall; i++) {
-                ret = asprintf(&(cmd_argv[3 + i]), "key%d", i + 1);
+            for (int64_t i = 0; i < config.num_keys_in_fcall; i++) {
+                ret = asprintf(&(cmd_argv[3 + i]), "key%ld", i + 1);
                 UNUSED(ret);
             }
             len = valkeyFormatCommandArgv(&cmd, config.num_keys_in_fcall + 3, (const char **)cmd_argv, NULL);
-            for (int i = 0; i < config.num_keys_in_fcall + 3; i++) {
+            for (int64_t i = 0; i < config.num_keys_in_fcall + 3; i++) {
                 zfree(cmd_argv[i]);
             }
             zfree(cmd_argv);
@@ -6011,13 +6063,13 @@ int main(int argc, char **argv) {
         if (!config.quiet) {
             printf("\nRestoring original server configuration...\n");
         }
-        int restored = restoreRuntimeConfig(config.runtime_config_ctx,
+        int64_t restored = restoreRuntimeConfig(config.runtime_config_ctx,
                                            config.cluster_node_count,
                                            config.cluster_nodes,
                                            config.ct,
                                            !config.quiet);
         if (restored > 0 && !config.quiet) {
-            printf("Successfully restored %d configuration settings\n", restored);
+            printf("Successfully restored %ld configuration settings\n", restored);
         }
     }
     

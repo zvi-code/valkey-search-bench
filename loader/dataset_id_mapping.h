@@ -35,12 +35,12 @@ typedef struct {
 /* Thread-safe cluster tag mapping table */
 typedef struct {
     char* prefix;  // Padding for cache alignment
-    int prefix_len; // Length of the prefix
+    int64_t prefix_len; // Length of the prefix
     vectorClusterMapping *mappings;
     uint64_t capacity;
     uint64_t count;
     uint64_t keys_scanned;  /* Number of keys scanned (for progress tracking) */
-    int is_cluster_mode_enabled;
+    int64_t is_cluster_mode_enabled;
     pthread_mutex_t mutex;
     struct progressBar *progress_bar;  /* Progress bar for visual feedback */
 } clusterTagMap;
@@ -76,9 +76,9 @@ int checkVectorExistsInCluster(clusterTagMap *tag_map, uint64_t vector_id);
  * @param tag_map Output mapping table
  * @return 0 on success, negative error code on failure
  */
-int buildVectorIdMappings(int is_cluster_mode_enabled, const char *prefix,
+int buildVectorIdMappings(int64_t is_cluster_mode_enabled, const char *prefix,
                          struct clusterNode **nodes,
-                         int node_count,
+                         int64_t node_count,
                          clusterTagMap *tag_map,
                         keyProcessorCallback key_processor);
 
@@ -89,7 +89,7 @@ size_t getClusterTagMapCount(clusterTagMap *tag_map);
  * @param active_threads Number of active worker threads
  * @param user_data User data (unused)
  */
-void vectorMappingProgressCallback(uint64_t keys_processed, int active_threads, void *user_data);
+void vectorMappingProgressCallback(uint64_t keys_processed, int64_t active_threads, void *user_data);
 
 /**
  * Cleanup cluster tag mapping table

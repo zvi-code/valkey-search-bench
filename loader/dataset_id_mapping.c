@@ -90,16 +90,16 @@ int checkVectorExistsInCluster(clusterTagMap *tag_map, uint64_t vector_id) {
     return 1;
 }
 
-void vectorMappingProgressCallback(uint64_t keys_processed, int active_threads, void *user_data) {
+void vectorMappingProgressCallback(uint64_t keys_processed, int64_t active_threads, void *user_data) {
     /* Progress is now handled by the progress bar in addClusterTagMapping */
     (void)keys_processed;
     (void)active_threads;
     (void)user_data;
 }
 
-int buildVectorIdMappings(int is_cluster_mode_enabled, const char *prefix,
+int buildVectorIdMappings(int64_t is_cluster_mode_enabled, const char *prefix,
                          struct clusterNode **nodes,
-                         int node_count,
+                         int64_t node_count,
                          clusterTagMap *tag_map,
                         keyProcessorCallback key_processor) {
     if (!prefix || !nodes || !tag_map) {
@@ -133,7 +133,7 @@ int buildVectorIdMappings(int is_cluster_mode_enabled, const char *prefix,
     /* Execute the scan */
     clusterScanResults results;
 
-    int scan_result = executeClusterScan(&scan_config, &results);
+    int64_t scan_result = executeClusterScan(&scan_config, &results);
     
     /* Update progress bar to show actual total scanned */
     if (progress.enabled) {
@@ -160,7 +160,7 @@ int buildVectorIdMappings(int is_cluster_mode_enabled, const char *prefix,
                results.total_scan_time_ms / 1000.0,
                results.keys_per_second);
     } else {
-        printf("[VECTOR-MAPPING] Scan failed with error code %d\n", scan_result);
+        printf("[VECTOR-MAPPING] Scan failed with error code %ld\n", scan_result);
     }
 
     return scan_result;

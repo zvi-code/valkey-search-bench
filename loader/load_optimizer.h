@@ -148,15 +148,15 @@ typedef enum {
  */
 typedef struct {
     const char *name;
-    int min_val;
-    int max_val;
-    int step_size;           /* Base step size - configured minimum */
-    int adaptive_step_size;  /* Current adaptive step size (4x → 1x base during optimization) */
-    int current_val;
-    int initial_val;         /* For reset between runs */
+    int64_t min_val;
+    int64_t max_val;
+    int64_t step_size;           /* Base step size - configured minimum */
+    int64_t adaptive_step_size;  /* Current adaptive step size (4x → 1x base during optimization) */
+    int64_t current_val;
+    int64_t initial_val;         /* For reset between runs */
     double gradient;         /* Estimated ∂f/∂θᵢ from finite differences */
     double gradient_magnitude; /* |∂f/∂θᵢ| for sorting by impact */
-    int last_update_iter;    /* Iteration number when parameter was last changed */
+    int64_t last_update_iter;    /* Iteration number when parameter was last changed */
     bool is_tunable;         /* False if parameter is constraint-only (not optimized) */
     bool locked;             /* True if parameter is locked after its optimization phase */
     bool grid_searched;      /* True if parameter has completed grid search in THROUGHPUT phase */
@@ -180,11 +180,11 @@ typedef struct {
 /* Single benchmark measurement */
 typedef struct {
     double metrics[METRIC_COUNT];
-    int param_values[16];      /* Snapshot of parameters at measurement time */
-    int num_params;
+    int64_t param_values[16];      /* Snapshot of parameters at measurement time */
+    int64_t num_params;
     double objective_score;    /* f(θ) normalized for maximization */
     bool constraints_satisfied;
-    int iteration;
+    int64_t iteration;
     time_t timestamp;
 } measurement_t;
 
@@ -192,15 +192,15 @@ typedef struct {
 typedef struct {
     /* Configuration */
     param_t *params;
-    int num_params;
+    int64_t num_params;
     constraint_t *constraints;
-    int num_constraints;
+    int64_t num_constraints;
     objective_t objective;
     
     /* Measurement history */
     measurement_t *history;
-    int history_size;
-    int history_capacity;
+    int64_t history_size;
+    int64_t history_capacity;
     
     /* Best solutions */
     measurement_t best_feasible;
@@ -214,41 +214,41 @@ typedef struct {
     double learning_decay;       /* β for exponential decay: α(t) = α₀ × β^t */
     double step_size_multiplier; /* Adaptive multiplier for parameter steps: 4.0 → 1.0 during optimization */
     
-    int stabilization_window;    /* Iterations to wait after parameter change (default: 3) */
-    int iterations_since_change;
-    int total_iterations;
+    int64_t stabilization_window;    /* Iterations to wait after parameter change (default: 3) */
+    int64_t iterations_since_change;
+    int64_t total_iterations;
     
     /* Early termination detection - avoids wasting time on hopeless configurations */
-    int poor_config_streak;      /* Count of consecutive iterations with >5-10x performance degradation */
+    int64_t poor_config_streak;      /* Count of consecutive iterations with >5-10x performance degradation */
     double baseline_objective;   /* Baseline score for detecting catastrophic degradation */
     bool early_abort_enabled;    /* Enable early termination feature (default: true) */
     
     /* Convergence tracking */
     double convergence_threshold;     /* Relative improvement threshold */
-    int consecutive_stable;           /* Count of stable iterations */
-    int required_stable_iterations;   /* Required for convergence */
+    int64_t consecutive_stable;           /* Count of stable iterations */
+    int64_t required_stable_iterations;   /* Required for convergence */
     double last_objective_value;
     
     /* Phase-specific state */
-    int coordinate_index;      /* For coordinate descent */
-    int refinement_cycles;
+    int64_t coordinate_index;      /* For coordinate descent */
+    int64_t refinement_cycles;
     
     /* Binary search state for RECALL phase (finding minimal ef_search) */
-    int binary_search_active;  /* 1 if binary search in progress, 0 otherwise */
-    int binary_search_param_idx; /* Index of parameter being binary searched (typically ef_search) */
-    int binary_search_low;     /* Current lower bound */
-    int binary_search_high;    /* Current upper bound */
-    int binary_search_last_feasible; /* Last value that satisfied constraints */
+    int64_t binary_search_active;  /* 1 if binary search in progress, 0 otherwise */
+    int64_t binary_search_param_idx; /* Index of parameter being binary searched (typically ef_search) */
+    int64_t binary_search_low;     /* Current lower bound */
+    int64_t binary_search_high;    /* Current upper bound */
+    int64_t binary_search_last_feasible; /* Last value that satisfied constraints */
     
     /* Grid search state for THROUGHPUT phase (exhaustive exploration) */
-    int grid_search_active;    /* 1 if grid search in progress, 0 otherwise */
-    int grid_search_param_idx; /* Current parameter being grid searched */
-    int grid_search_phase;     /* 0=coarse, 1=fine */
-    int grid_search_tested_count; /* Number of values tested so far */
-    int grid_search_best_value;   /* Best value found so far */
+    int64_t grid_search_active;    /* 1 if grid search in progress, 0 otherwise */
+    int64_t grid_search_param_idx; /* Current parameter being grid searched */
+    int64_t grid_search_phase;     /* 0=coarse, 1=fine */
+    int64_t grid_search_tested_count; /* Number of values tested so far */
+    int64_t grid_search_best_value;   /* Best value found so far */
     double grid_search_best_score; /* Best score found so far */
-    int grid_search_fine_start;   /* Start of fine search range (fixed at phase transition) */
-    int grid_search_fine_end;     /* End of fine search range (fixed at phase transition) */
+    int64_t grid_search_fine_start;   /* Start of fine search range (fixed at phase transition) */
+    int64_t grid_search_fine_end;     /* End of fine search range (fixed at phase transition) */
     
     /* Valkey benchmark integration */
     void *benchmark_context;   /* Opaque pointer to benchmark config */
@@ -265,15 +265,15 @@ void optimizer_destroy(optimizer_t *opt);
 
 /* Add tunable parameter that optimizer can adjust */
 bool optimizer_add_param(optimizer_t *opt, const char *name,
-                         int min_val, int max_val, int step_size, int initial_val);
+                         int64_t min_val, int64_t max_val, int64_t step_size, int64_t initial_val);
 
 /* Add tunable parameter with specified group */
 bool optimizer_add_param_grouped(optimizer_t *opt, const char *name,
-                                 int min_val, int max_val, int step_size, int initial_val,
+                                 int64_t min_val, int64_t max_val, int64_t step_size, int64_t initial_val,
                                  param_group_t group);
 
 /* Add constraint-only parameter (not tunable, but can be constrained) */
-bool optimizer_add_constraint_param(optimizer_t *opt, const char *name, int current_val);
+bool optimizer_add_constraint_param(optimizer_t *opt, const char *name, int64_t current_val);
 
 /* Add constraint: metric ⋚ threshold */
 bool optimizer_add_constraint(optimizer_t *opt, metric_t metric,
@@ -286,8 +286,8 @@ void optimizer_set_objective(optimizer_t *opt, metric_t metric, objective_type_t
 status_t optimizer_step(optimizer_t *opt, const double metrics[METRIC_COUNT]);
 
 /* Query current configuration */
-void optimizer_get_current_config(const optimizer_t *opt, int *values, int max_params);
-const char* optimizer_get_param_name(const optimizer_t *opt, int idx);
+void optimizer_get_current_config(const optimizer_t *opt, int64_t *values, int64_t max_params);
+const char* optimizer_get_param_name(const optimizer_t *opt, int64_t idx);
 int optimizer_get_param_count(const optimizer_t *opt);
 
 /* Get best solution found so far */

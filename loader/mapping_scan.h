@@ -60,27 +60,27 @@ typedef struct valkeyReply valkeyReply;
  */
 
 /* Key processing callback function type */
-typedef int (*keyProcessorCallback)(const char *key, void *user_data, int thread_id);
+typedef int64_t (*keyProcessorCallback)(const char *key, void *user_data, int64_t thread_id);
 
 /* Scan progress callback function type */
-typedef void (*scanProgressCallback)(uint64_t keys_processed, int active_threads, void *user_data);
+typedef void (*scanProgressCallback)(uint64_t keys_processed, int64_t active_threads, void *user_data);
 
 /* Per-node scan worker configuration */
 typedef struct {
     struct clusterNode *node;     /* Target cluster node */
     valkeyContext *context;       /* Redis connection context */
     const char *match_pattern;    /* SCAN MATCH pattern */
-    int scan_batch_size;         /* Keys per SCAN call */
+    int64_t scan_batch_size;         /* Keys per SCAN call */
     keyProcessorCallback processor; /* Key processing function */
     void *user_data;             /* User data for callbacks */
-    int thread_id;               /* Worker thread identifier */
+    int64_t thread_id;               /* Worker thread identifier */
 
     /* Thread synchronization */
     pthread_t thread;
     pthread_mutex_t *progress_mutex;
     uint64_t *total_keys_processed;
-    int *active_threads;
-    int *error_occurred;
+    int64_t *active_threads;
+    int64_t *error_occurred;
 } scanWorker;
 
 /* Main cluster scan configuration */
@@ -88,10 +88,10 @@ typedef struct {
     /* Input parameters */
     const char *match_pattern;      /* Key pattern to match (e.g., "prefix*") */
     struct clusterNode **nodes;     /* Array of cluster nodes to scan */
-    int node_count;                /* Number of nodes */
-    int scan_batch_size;           /* SCAN batch size (default: 1000) */
-    int max_concurrent_workers;    /* Max parallel workers (default: node_count) */
-    int silent_mode;               /* Suppress [SCAN] output messages (for progress bars) */
+    int64_t node_count;                /* Number of nodes */
+    int64_t scan_batch_size;           /* SCAN batch size (default: 1000) */
+    int64_t max_concurrent_workers;    /* Max parallel workers (default: node_count) */
+    int64_t silent_mode;               /* Suppress [SCAN] output messages (for progress bars) */
 
     /* Callback functions */
     keyProcessorCallback key_processor;     /* Process each discovered key */
@@ -100,15 +100,15 @@ typedef struct {
 
     /* Progress tracking */
     uint64_t total_keys_processed;
-    int progress_report_interval;          /* Report progress every N keys */
+    int64_t progress_report_interval;          /* Report progress every N keys */
 } clusterScanConfig;
 
 /* Scan operation results */
 typedef struct {
     uint64_t total_keys_processed;
     uint64_t total_scan_time_ms;
-    int nodes_scanned;
-    int errors_encountered;
+    int64_t nodes_scanned;
+    int64_t errors_encountered;
     double keys_per_second;
 } clusterScanResults;
 
@@ -124,7 +124,7 @@ typedef struct {
 void initClusterScanConfig(clusterScanConfig *config,
                           const char *match_pattern,
                           struct clusterNode **nodes,
-                          int node_count,
+                          int64_t node_count,
                           keyProcessorCallback key_processor,
                           void *user_data);
 
@@ -144,9 +144,9 @@ int executeClusterScan(clusterScanConfig *config, clusterScanResults *results);
  * @param progress_interval Progress report interval
  */
 void setClusterScanPerformance(clusterScanConfig *config,
-                              int batch_size,
-                              int max_workers,
-                              int progress_interval);
+                              int64_t batch_size,
+                              int64_t max_workers,
+                              int64_t progress_interval);
 
 /**
  * Set progress callback for scan monitoring

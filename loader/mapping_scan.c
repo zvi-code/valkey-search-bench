@@ -96,22 +96,22 @@ static void* scanWorkerThread(void *arg) {
     scanWorker *worker = (scanWorker*)arg;
     uint64_t cursor = 0;
     uint64_t keys_processed_by_worker = 0;
-    int error_occurred = 0;
+    int64_t error_occurred = 0;
 
     do {
         /* Execute SCAN command with pattern matching */
         valkeyReply *reply = valkeyCommand(worker->context,
-            "SCAN %lu MATCH %s COUNT %d",
+            "SCAN %lu MATCH %s COUNT %ld",
             cursor, worker->match_pattern, worker->scan_batch_size);
 
         if (!reply) {
-            fprintf(stderr, "[SCAN] Worker %d: Connection error to node\n", worker->thread_id);
+            fprintf(stderr, "[SCAN] Worker %ld: Connection error to node\n", worker->thread_id);
             error_occurred = 1;
             break;
         }
 
         if (reply->type != VALKEY_REPLY_ARRAY || reply->elements != 2) {
-            fprintf(stderr, "[SCAN] Worker %d: Invalid SCAN response format\n", worker->thread_id);
+            fprintf(stderr, "[SCAN] Worker %ld: Invalid SCAN response format\n", worker->thread_id);
             freeReplyObject(reply);
             error_occurred = 1;
             break;
@@ -131,11 +131,11 @@ static void* scanWorkerThread(void *arg) {
                 valkeyReply *key_reply = keys_array->element[i];
                 if (key_reply->type == VALKEY_REPLY_STRING) {
                     /* Call user's key processor callback */
-                    int callback_result = worker->processor(key_reply->str,
+                    int64_t callback_result = worker->processor(key_reply->str,
                                                           worker->user_data,
                                                           worker->thread_id);
                     if (callback_result != 0) {
-                        fprintf(stderr, "[SCAN] Worker %d: Key processor callback failed\n",
+                        fprintf(stderr, "[SCAN] Worker %ld: Key processor callback failed\n",
                                worker->thread_id);
                         error_occurred = 1;
                         freeReplyObject(reply);
@@ -202,7 +202,7 @@ static valkeyContext* createNodeConnection(struct clusterNode *node) {
 void initClusterScanConfig(clusterScanConfig *config,
                           const char *match_pattern,
                           struct clusterNode **nodes,
-                          int node_count,
+                          int64_t node_count,
                           keyProcessorCallback key_processor,
                           void *user_data) {
     memset(config, 0, sizeof(clusterScanConfig));
@@ -220,9 +220,9 @@ void initClusterScanConfig(clusterScanConfig *config,
 }
 
 void setClusterScanPerformance(clusterScanConfig *config,
-                              int batch_size,
-                              int max_workers,
-                              int progress_interval) {
+                              int64_t batch_size,
+                              int64_t max_workers,
+                              int64_t progress_interval) {
     if (batch_size > 0) config->scan_batch_size = batch_size;
     if (max_workers > 0) config->max_concurrent_workers = max_workers;
     if (progress_interval > 0) config->progress_report_interval = progress_interval;
@@ -239,7 +239,7 @@ int executeClusterScan(clusterScanConfig *config, clusterScanResults *results) {
     }
 
     uint64_t start_time = getCurrentTimeMs();
-    int actual_workers = (config->max_concurrent_workers < config->node_count) ?
+    int64_t actual_workers = (config->max_concurrent_workers < config->node_count) ?
                         config->max_concurrent_workers : config->node_count;
 
     /* Allocate worker array */
@@ -251,19 +251,19 @@ int executeClusterScan(clusterScanConfig *config, clusterScanResults *results) {
     /* Shared synchronization variables */
     pthread_mutex_t progress_mutex = PTHREAD_MUTEX_INITIALIZER;
     uint64_t total_keys_processed = 0;
-    int active_threads = 0;
-    int error_occurred = 0;
+    int64_t active_threads = 0;
+    int64_t error_occurred = 0;
 
     /* Initialize and start worker threads */
-    int threads_created = 0;
-    for (int i = 0; i < actual_workers; i++) {
+    int64_t threads_created = 0;
+    for (int64_t i = 0; i < actual_workers; i++) {
         scanWorker *worker = &workers[i];
 
         worker->node = config->nodes[i % config->node_count];
         worker->context = createNodeConnection(worker->node);
 
         if (!worker->context) {
-            fprintf(stderr, "[SCAN] Failed to connect to node %d\n", i);
+            fprintf(stderr, "[SCAN] Failed to connect to node %ld\n", i);
             continue;
         }
 
@@ -282,7 +282,7 @@ int executeClusterScan(clusterScanConfig *config, clusterScanResults *results) {
             threads_created++;
             active_threads++;
         } else {
-            fprintf(stderr, "[SCAN] Failed to create worker thread %d\n", i);
+            fprintf(stderr, "[SCAN] Failed to create worker thread %ld\n", i);
             if (worker->context) {
                 valkeyFree(worker->context);
                 worker->context = NULL;
@@ -296,7 +296,7 @@ int executeClusterScan(clusterScanConfig *config, clusterScanResults *results) {
     }
 
     if (!config->silent_mode) {
-        printf("[SCAN] Started %d worker threads scanning pattern '%s'\n",
+        printf("[SCAN] Started %ld worker threads scanning pattern '%s'\n",
                threads_created, config->match_pattern);
     }
 
@@ -307,7 +307,7 @@ int executeClusterScan(clusterScanConfig *config, clusterScanResults *results) {
 
         pthread_mutex_lock(&progress_mutex);
         uint64_t current_keys = total_keys_processed;
-        int current_active = active_threads;
+        int64_t current_active = active_threads;
         pthread_mutex_unlock(&progress_mutex);
 
         /* Report progress if callback is provided */
@@ -319,7 +319,7 @@ int executeClusterScan(clusterScanConfig *config, clusterScanResults *results) {
     }
 
     /* Wait for all threads to complete and cleanup */
-    for (int i = 0; i < actual_workers; i++) {
+    for (int64_t i = 0; i < actual_workers; i++) {
         if (workers[i].context) {
             pthread_join(workers[i].thread, NULL);
             valkeyFree(workers[i].context);
