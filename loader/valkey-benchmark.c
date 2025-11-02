@@ -320,6 +320,9 @@ typedef struct benchmarkThread {
     pthread_t thread;
     aeEventLoop *el;
     list *paused_clients;
+    int64_t *node_request_counters;  /* Array of request counts per node (current cycle) */
+    int64_t *node_quota_remaining;   /* Array of remaining quota per node */
+    list *clients;
 } benchmarkThread;
 
 
@@ -394,10 +397,10 @@ static struct config {
     uint64_t time_per_token;
     uint64_t time_per_burst;
     int64_t balance_nodes;           /* Enable fair node balancing mode */
-    uint64_t balance_cycle_ms;       /* Cycle duration in milliseconds (default: 1000ms) */
-    atomic_uint_fast64_t balance_cycle_start_ns; /* Current cycle start time (nanoseconds) */
-    atomic_uint_fast64_t *node_request_counters;  /* Array of request counts per node */
-    int64_t requests_per_node_per_cycle;         /* Quota: numclients/selected_node_count */
+    int64_t balance_quota_step;      /* Quota of requests per node per cycle (default: 1000) */
+    int64_t balance_tolerance_pct;   /* Tolerance percentage for imbalance (default: 10) */
+    int64_t *node_request_counters;  /* Array of request counts per node (current cycle) */
+    int64_t *node_quota_remaining;   /* Array of remaining quota per node */
     int64_t clean;
     int64_t use_search; /* Use search indexes */
     searchIndex search;
@@ -695,7 +698,8 @@ static void collectOptimizerMetrics(double metrics[METRIC_COUNT]) {
 
 /* Prototypes */
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask);
-static void createMissingClients(client c);
+// static long long awakenNodeBalancedClient(struct aeEventLoop *eventLoop, long long id, void *clientData);
+static void createMissingClients(char *cmd, int64_t len, int64_t seqlen);
 static benchmarkThread *createBenchmarkThread(int64_t index);
 static void freeBenchmarkThread(benchmarkThread *thread);
 static void freeBenchmarkThreads(void);
@@ -868,6 +872,7 @@ static void replaceTagFieldWithPadding(char* payload_start, int64_t header_len,
     
     /* Verify tag_len can be represented with header_len digits */
     int64_t tag_len_digits = tag_len > 0 ? snprintf(NULL, 0, "%ld", tag_len) : 1;
+    (void)tag_len_digits; /* Used in assert */
     assert(tag_len_digits <= header_len);
     
     /* Copy tag data to payload area */
@@ -893,6 +898,7 @@ static void replaceTagFieldWithPadding(char* payload_start, int64_t header_len,
     /* Update the tag field length with leading zeros to maintain fixed width */
     char length_str[32];
     int64_t written = snprintf(length_str, sizeof(length_str), "%0*ld", (int)header_len, tag_len);
+    (void)written; /* Used in assert */
     assert(written == header_len); /* Ensure we didn't overflow the header length */
     
     /* Write the new length after the '$' */
@@ -934,6 +940,7 @@ static void replaceTagFieldWithPadding(char* payload_start, int64_t header_len,
         int64_t padding_header_written = snprintf(padding_start, unused_bytes,
                                              " __padding__ $%04ld\r\n", 
                                              padding_payload_len);
+        (void)padding_header_written; /* Used in assert */
         
         /* Verify we wrote exactly what we expected (space + __padding__ + space + $ + 4 digits + \r\n = 19 chars) */
         assert(padding_header_written == 19);
@@ -1685,6 +1692,7 @@ static sds getSearchKeyTemplate(void) {
     } else {
         ret = snprintf(key, key_len+1, "%s:%s", config.search.prefix, PLACEHOLDERS[ph_index].name);
     }    
+    (void)ret; /* Used in assert */
     assert(ret == (int64_t)(key_len)); // -1 for null terminator    
     return key;
 }
@@ -2480,23 +2488,33 @@ static void freeClient(client c) {
     sdsfree(c->obuf);
     zfree(c->stagptr);
     if (c->dataset_query_indices) zfree(c->dataset_query_indices);
-    zfree(c);
     if (config.num_threads) pthread_mutex_lock(&(config.liveclients_mutex));
     config.liveclients--;
-    ln = listSearchKey(config.clients, c);
+    list* l;
+    if (c->thread_id >= 0) {
+        l = config.threads[c->thread_id]->clients;
+    } else {
+        l = config.clients;
+    }
+    ln = listSearchKey(l, c);
     assert(ln != NULL);
-    listDelNode(config.clients, ln);
+    listDelNode(l, ln);
+    zfree(c);
     if (config.num_threads) pthread_mutex_unlock(&(config.liveclients_mutex));
 }
 
-static void freeAllClients(void) {
-    listNode *ln = config.clients->head, *next;
+static void freeClientsList(list *clients) {
+    listNode *ln = clients->head, *next;
 
     while (ln) {
         next = ln->next;
         freeClient(ln->value);
         ln = next;
     }
+}
+
+static void freeAllClients(void) {
+    freeClientsList(config.clients);
 }
 
 static void resetClient(client c) {
@@ -2513,7 +2531,7 @@ static void resetClient(client c) {
     /* Reset query index queue for dataset */
     c->dataset_query_head = 0;
     c->dataset_query_tail = 0;
-
+    
     c->running_queries = 0;
     c->latency = -1;
 }
@@ -2527,6 +2545,7 @@ static int64_t findNodeIndex(clusterNode *node) {
     return -1; /* Should never happen if node is valid */
 }
 
+static __thread int64_t num_sleepers = 0;
 /* Acquires the specified number of tokens from the token bucket or calculates the wait time if tokens are not available.
  * This function implements a token bucket rate limiting algorithm to control access to a resource.
  *
@@ -2585,93 +2604,259 @@ static long long acquireTokenOrWait(int64_t tokens) {
     return delay_time / 1000000;
 }
 
-/* Check if we've entered a new cycle and reset all node counters if needed.
- * This function is thread-safe and uses atomic operations to ensure only one
- * thread resets the counters when a new cycle begins. */
-static void checkAndResetCycle(uint64_t now_ns, uint64_t *current_cycle_start) {
-    uint64_t cycle_duration_ns = config.balance_cycle_ms * 1000000ULL;
-    uint64_t old_start = atomic_load_explicit(&config.balance_cycle_start_ns, memory_order_relaxed);
+/* Quota-based node balancing: Check if a node has remaining quota.
+ * 
+ * New Strategy (Quota-based):
+ * 1. Each node starts with a quota (e.g., 1000 requests via balance_quota_step)
+ * 2. Each node tracks completed_requests_since_last_checked (node_request_counters)
+ * 3. When ANY node exhausts its quota:
+ *    a. Find min_completed = MIN(node_request_counters[i]) across all nodes
+ *    b. If min_completed == 0: Sleep (wait for slowest node to make progress)
+ *    c. Else:
+ *       - Calculate quota_to_add = min_completed * (100 + tolerance_pct) / 100
+ *       - Add quota_to_add to all nodes' remaining quota
+ *       - Reset all node_request_counters to 0
+ *       - First client adding quota wakes all sleeping clients
+ * 4. This ensures:
+ *    - Slowest node always completes its work before cycle ends
+ *    - Fast nodes can't get more than initial_quota ahead of slowest
+ *      (because all get same increment based on slowest's progress)
+ *    - Tolerance allows for system jitter (e.g., 10% = fast can be 10% ahead)
+ *    - Natural adaptation to actual throughput
+ * 
+ * Returns delay in milliseconds if node should be throttled, 0 otherwise.
+ */
+static long long checkNodeBalanceThrottle(int64_t thread_id, int64_t node_idx, int64_t tokens) {
+    if (node_idx < 0 || node_idx >= config.selected_node_count) {
+        return 0;
+    }
+    int64_t* node_quota_remaining;
+    int64_t* node_request_counters;
+    if (thread_id == -1) {
+        /* Single-threaded mode: use global counters */
+        node_quota_remaining = config.node_quota_remaining;
+        node_request_counters = config.node_request_counters;
+    } else {
+        assert(config.num_threads > 0 && thread_id < config.num_threads);
+        /* Multi-threaded mode: use per-thread counters */
+        node_quota_remaining = config.threads[thread_id]->node_quota_remaining;
+        node_request_counters = config.threads[thread_id]->node_request_counters;
+    }
     
-    /* Check if we need to start a new cycle */
-    if (old_start == 0 || now_ns >= old_start + cycle_duration_ns) {
-        uint64_t new_start = now_ns;
-        
-        /* Try to atomically update the cycle start time */
-        if (atomic_compare_exchange_strong_explicit(
-                &config.balance_cycle_start_ns,
-                &old_start,
-                new_start,
-                memory_order_release,
-                memory_order_relaxed)) {
-            /* Successfully started new cycle - reset all node counters */
-            for (int64_t i = 0; i < config.selected_node_count; i++) {
-                atomic_store_explicit(&config.node_request_counters[i], 0, memory_order_relaxed);
-            }
+    /* Node has exhausted quota - check if we should start a new cycle
+     * A new cycle starts when the slowest node has completed its quota */
+    
+    /* Find minimum requests completed in current cycle */
+    int64_t min_completed = INT64_MAX;
+    for (int64_t i = 0; i < config.selected_node_count; i++) {
+        uint64_t completed = node_request_counters[i];
+        if (completed < min_completed) {
+            min_completed = completed;
         }
     }
     
-    /* Return the current cycle start time */
-    *current_cycle_start = atomic_load_explicit(&config.balance_cycle_start_ns, memory_order_relaxed);
+    assert(min_completed != INT64_MAX);
+    if (min_completed <= 0) {
+        num_sleepers++;
+        return 1; /* Slowest node hasn't made progress yet - throttle */
+    }
+    /* Calculate how many requests the slowest node needs to complete to finish its quota
+     * Note: quota_remaining can be negative if we allowed burst */
+    for (int64_t i = 0; i < config.selected_node_count; i++) {
+        // compare and swap node_quota_remaining with node_quota_remaining + (min_completed * (100 + tolerance_pct) / 100)
+        node_quota_remaining[i] += (min_completed * (100 + config.balance_tolerance_pct)) / 100;
+        node_request_counters[i] = 0; /* Reset for next cycle */
+    }
+    
+    return 0; /* New quota added - allow request */
 }
 
 /* Acquire tokens for a specific node or calculate wait time if node quota is exhausted.
  * This implements per-node rate limiting to ensure fair distribution across cluster nodes.
  * 
- * Returns the delay time in milliseconds if the node has exhausted its quota,
- * or 0 if the request can proceed immediately. */
-static long long acquireNodeTokenOrWait(int64_t node_idx, int64_t tokens) {
-    if (node_idx < 0 || node_idx >= config.selected_node_count) {
-        return 0; /* Invalid node index, proceed anyway */
+ * NOTE: This function does NOT increment statistics counters - that's done separately in writeHandler.
+ * It uses dynamic balancing to throttle nodes that get too far ahead of the slowest node.
+ * 
+ * Returns the delay time in milliseconds if the node should be throttled,
+//  * or 0 if the request can proceed immediately. */
+// static long long acquireNodeTokenOrWait(int64_t thread_id, int64_t node_idx, int64_t tokens) {
+//     /* Use dynamic balancing strategy: throttle nodes that are >10% ahead of slowest */
+//     return checkNodeBalanceThrottle(thread_id, node_idx, tokens);
+// }
+
+/* Test function to simulate node balancing with different latencies.
+ * 
+ * This test simulates multiple nodes with different request latencies (in ms)
+ * and verifies that the balancing algorithm allows throughput equal to:
+ *   expected_rps = num_nodes / slowest_latency_ms * 1000
+ * 
+ * With 10% tolerance, each node should achieve approximately the same RPS as the slowest node.
+ * 
+ * Input: Array of latencies in milliseconds for each node
+ * Example: [3000, 1000, 3000, 5000, 550, 100, 9000] means:
+ *   - Slowest node has 9000ms latency = 0.111 rps
+ *   - Expected balanced throughput = 7 nodes * 0.111 rps = 0.778 rps total
+ *   - Each node should do ~0.111 rps (within 10% tolerance)
+ */
+static void testNodeBalancing(int64_t *latencies_ms, int64_t num_nodes, int64_t duration_sec) {
+    printf("\n=== Node Balance Test ===\n");
+    printf("Testing %ld nodes for %ld seconds\n", num_nodes, duration_sec);
+    
+    /* Find slowest node and calculate expected RPS */
+    int64_t max_latency_ms = 0;
+    for (int64_t i = 0; i < num_nodes; i++) {
+        printf("  Node %ld: %ld ms latency\n", i, latencies_ms[i]);
+        if (latencies_ms[i] > max_latency_ms) {
+            max_latency_ms = latencies_ms[i];
+        }
     }
     
-    uint64_t now_ns = nstime();
-    uint64_t cycle_start_ns;
+    double slowest_node_rps = 1000.0 / max_latency_ms;
+    double expected_total_rps = slowest_node_rps * num_nodes;
     
-    /* Check and potentially reset the cycle */
-    checkAndResetCycle(now_ns, &cycle_start_ns);
+    printf("\nSlowest node: %ld ms = %.3f rps\n", max_latency_ms, slowest_node_rps);
+    printf("Expected balanced total: %.3f rps (%.3f per node)\n", expected_total_rps, slowest_node_rps);
+    printf("Expected tolerance: +/- 10%%\n\n");
     
-    /* Try to acquire tokens for this node */
-    uint64_t old_count = atomic_load_explicit(&config.node_request_counters[node_idx], memory_order_relaxed);
-    uint64_t new_count;
+    /* Save original config */
+    int64_t orig_node_count = config.selected_node_count;
+    int64_t orig_quota_step = config.balance_quota_step;
+    int64_t orig_tolerance = config.balance_tolerance_pct;
+    int64_t *orig_counters = config.node_request_counters;
+    int64_t *orig_quota = config.node_quota_remaining;
     
+    /* Setup test config with quota-based balancing */
+    config.selected_node_count = num_nodes;
+    config.balance_quota_step = 10;  /* Start with small quota for testing */
+    config.balance_tolerance_pct = 10;
+    config.node_request_counters = zcalloc(sizeof(int64_t) * num_nodes);
+    config.node_quota_remaining = zcalloc(sizeof(int64_t) * num_nodes);
+    
+    printf("Using quota-based balancing: %ld requests per cycle\n", config.balance_quota_step);
+    
+    /* Initialize counters and quotas */
+    for (int64_t i = 0; i < num_nodes; i++) {
+        config.node_quota_remaining[i] = config.balance_quota_step;
+    }
+    
+    /* Simulate requests for each node */
+    uint64_t *total_requests = zcalloc(sizeof(uint64_t) * num_nodes);
+    uint64_t *total_throttled_ms = zcalloc(sizeof(uint64_t) * num_nodes);
+    
+    uint64_t start_time_ns = nstime();
+    uint64_t duration_ns = duration_sec * 1000000000ULL;
+    uint64_t *next_available_ns = zcalloc(sizeof(uint64_t) * num_nodes);
+    
+    /* Initialize all nodes as available now */
+    for (int64_t i = 0; i < num_nodes; i++) {
+        next_available_ns[i] = start_time_ns;
+    }
+    
+    printf("Simulating requests...\n");
+    
+    int debug_counter = 0;
     while (1) {
-        new_count = old_count + tokens;
+        uint64_t now_ns = nstime();
+        if (now_ns - start_time_ns >= duration_ns) {
+            break;
+        }
         
-        /* Check if this would exceed the node's quota */
-        if (new_count > (uint64_t)config.requests_per_node_per_cycle) {
-            /* Node quota exhausted - calculate delay until next cycle */
-            uint64_t cycle_duration_ns = config.balance_cycle_ms * 1000000ULL;
-            uint64_t cycle_end_ns = cycle_start_ns + cycle_duration_ns;
-            
-            if (now_ns >= cycle_end_ns) {
-                /* We're already past the cycle end, retry (cycle will reset) */
-                checkAndResetCycle(now_ns, &cycle_start_ns);
-                old_count = atomic_load_explicit(&config.node_request_counters[node_idx], memory_order_relaxed);
-                continue;
+        /* Try to send request from each node if it's available */
+        for (int64_t node = 0; node < num_nodes; node++) {
+            if (now_ns >= next_available_ns[node]) {
+                /* Node is ready to send a request */
+                
+                /* Check if balancing would throttle this node (check BEFORE incrementing) */
+                long long delay_ms = checkNodeBalanceThrottle(-1, node, 1);
+                
+                if (debug_counter < 50) {
+                    int64_t quota = config.node_quota_remaining[node];
+                    printf("[Debug %d] Node %ld: quota=%ld, delay=%lld ms\n",
+                           debug_counter, node, quota, delay_ms);
+                    debug_counter++;
+                }
+                
+                if (delay_ms > 0) {
+                    /* Throttled - don't increment, add delay */
+                    total_throttled_ms[node] += delay_ms;
+                    next_available_ns[node] = now_ns + (delay_ms * 1000000ULL);
+                } else {
+                    config.node_request_counters[node] += 1;
+                    config.node_quota_remaining[node] -= 1;
+                    total_requests[node]++;
+                    
+                    /* Node will be busy for its latency duration */
+                    next_available_ns[node] = now_ns + (latencies_ms[node] * 1000000ULL);
+                }
             }
-            
-            uint64_t delay_ns = cycle_end_ns - now_ns;
-            return (delay_ns / 1000000) + 1; /* Convert to ms, add 1ms buffer */
         }
         
-        /* Try to atomically increment the counter */
-        if (atomic_compare_exchange_weak_explicit(
-                &config.node_request_counters[node_idx],
-                &old_count,
-                new_count,
-                memory_order_release,
-                memory_order_relaxed)) {
-            /* Successfully acquired tokens */
-            return 0;
-        }
+        /* Small sleep to avoid burning CPU (simulate event loop) */
+        usleep(1000); /* 1 millisecond - check frequently to catch imbalance early */
+    }
+    
+    uint64_t end_time_ns = nstime();
+    double actual_duration_sec = (end_time_ns - start_time_ns) / 1000000000.0;
+    
+    printf("\n=== Results after %.2f seconds ===\n", actual_duration_sec);
+    
+    uint64_t total_all_requests = 0;
+    uint64_t min_requests = UINT64_MAX;
+    uint64_t max_requests = 0;
+    
+    for (int64_t i = 0; i < num_nodes; i++) {
+        double node_rps = total_requests[i] / actual_duration_sec;
+        double node_throttle_pct = (total_throttled_ms[i] * 100.0) / (actual_duration_sec * 1000.0);
         
-        /* CAS failed, retry with updated old_count */
+        printf("Node %ld: %lu requests (%.3f rps) - throttled %.1f%% of time\n",
+               i, total_requests[i], node_rps, node_throttle_pct);
+        
+        total_all_requests += total_requests[i];
+        if (total_requests[i] < min_requests) min_requests = total_requests[i];
+        if (total_requests[i] > max_requests) max_requests = total_requests[i];
+    }
+    
+    double actual_total_rps = total_all_requests / actual_duration_sec;
+    double imbalance_pct = min_requests > 0 ? 
+        ((double)(max_requests - min_requests) / min_requests * 100.0) : 0;
+    
+    printf("\nTotal: %lu requests (%.3f rps)\n", total_all_requests, actual_total_rps);
+    printf("Expected: %.3f rps\n", expected_total_rps);
+    printf("Imbalance: %.1f%% (min=%lu, max=%lu)\n", imbalance_pct, min_requests, max_requests);
+    
+    /* Check if within tolerance */
+    int passed = 1;
+    if (imbalance_pct > 15.0) { /* Allow 15% due to simulation granularity */
+        printf("❌ FAILED: Imbalance %.1f%% exceeds 15%% tolerance\n", imbalance_pct);
+        passed = 0;
+    } else {
+        printf("✓ PASSED: Imbalance %.1f%% within tolerance\n", imbalance_pct);
+    }
+    
+    /* Restore original config */
+    config.selected_node_count = orig_node_count;
+    config.balance_quota_step = orig_quota_step;
+    config.balance_tolerance_pct = orig_tolerance;
+    zfree(config.node_request_counters);
+    zfree(config.node_quota_remaining);
+    config.node_request_counters = orig_counters;
+    config.node_quota_remaining = orig_quota;
+    
+    zfree(total_requests);
+    zfree(total_throttled_ms);
+    zfree(next_available_ns);
+    
+    printf("=========================\n\n");
+    
+    if (!passed) {
+        exit(1);
     }
 }
 
 static void clientDone(client c) {
     int64_t requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     if (requests_finished >= config.requests) {
+        
         freeClient(c);
         if (!config.num_threads && config.el) aeStop(config.el);
         return;
@@ -2681,7 +2866,7 @@ static void clientDone(client c) {
     } else {
         if (config.num_threads) pthread_mutex_lock(&(config.liveclients_mutex));
         config.liveclients--;
-        createMissingClients(c);
+        createMissingClients("", 0, 1);
         config.liveclients++;
         if (config.num_threads) pthread_mutex_unlock(&(config.liveclients_mutex));
         freeClient(c);
@@ -2854,44 +3039,25 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(el);
     UNUSED(fd);
     UNUSED(mask);
-
+    assert( config.pipeline > 0 );
     /* Priority 1: Check node balancing quota (more restrictive) 
      * Only enforce during actual benchmark phase.
      * We activate node balancing only when benchmark requests start being issued.
      * This excludes all setup phases: init, info fetch, backfill, prefill, etc. */
-    if (config.balance_nodes && config.node_request_counters && c->cluster_node) {
-        /* Only apply balancing once actual benchmark requests start
-         * (requests_issued > 0 means benchmark started, prefix_pending == 0 means setup done) */
-        int64_t requests_issued = atomic_load_explicit(&config.requests_issued, memory_order_relaxed);
-        
-        if (requests_issued > 0 && c->prefix_pending == 0) {
-            int64_t node_idx = findNodeIndex(c->cluster_node);
-            if (node_idx >= 0) {
-                long long delay = acquireNodeTokenOrWait(node_idx, config.pipeline);
-
-                if (delay) {
-                    int64_t thread_id = c->thread_id;
-                    int64_t paused_clients_count = 0;
-
-                    c->paused = 1;
-                    aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
-
-                    benchmarkThread *thread = NULL;
-                if (thread_id < 0) {
-                    paused_clients_count = listLength(config.paused_clients);
-                    listAddNodeTail(config.paused_clients, c);
-                } else {
-                    thread = config.threads[thread_id % config.num_threads];
-                    paused_clients_count = listLength(thread->paused_clients);
-                    listAddNodeTail(thread->paused_clients, c);
-                }
-                if (paused_clients_count == 0) {
-                    /* Create a time event to awaken the client. */
-                    aeCreateTimeEvent(el, delay, awakenPausedClient, (void *)thread, NULL);
-                }
-                return;
+    if (c->written == 0 && config.balance_nodes && config.node_request_counters && c->cluster_node && c->thread_id != -1) {
+        assert(c->thread_id < config.num_threads);
+        int64_t node_idx = findNodeIndex(c->cluster_node);
+        if (node_idx >= 0) {
+            if (c->prefix_pending == 0 && config.threads[c->thread_id]->node_quota_remaining[node_idx] < config.pipeline) {
+                // If quota is already exhausted, check if we should throttle
+                if (checkNodeBalanceThrottle(c->thread_id, node_idx, config.pipeline)) {
+                    // Throttle: simply return and try again later
+                    return;
                 }
             }
+            config.threads[c->thread_id]->node_request_counters[node_idx] += config.pipeline;
+            config.threads[c->thread_id]->node_quota_remaining[node_idx] -= config.pipeline;
+            
         }
     }
 
@@ -2995,17 +3161,23 @@ static client createClient(char *cmd, int64_t len, int64_t seqlen, client from, 
     int port = config.conn_info.hostport;
     struct timeval tv = {0};
     if (config.selected_node_count > 0) {
+        int num_clients;
         /* If the user specified a list of nodes, use them in a round-robin
          * fashion. */
         int64_t node_idx = 0;
-        /* Simple round-robin based on client count */
-        node_idx = config.liveclients % config.selected_node_count;
+        if (thread_id >= 0) {
+            benchmarkThread *thread = config.threads[thread_id];
+            num_clients = listLength(thread->clients);
+        } else {
+            num_clients = config.liveclients;
+        }
+        node_idx = num_clients % config.selected_node_count;
         clusterNode *node = config.selected_nodes[node_idx];
         assert(node != NULL);
         ip = node->ip;
         port = node->port;
         c->cluster_node = node;
-    } 
+    }
 
     c->context = valkeyConnectWrapper(config.ct, ip, port, tv, 1, config.mptcp);
     if (c->context->err) {
@@ -3135,11 +3307,14 @@ static client createClient(char *cmd, int64_t len, int64_t seqlen, client from, 
         }
     }
     aeEventLoop *el = NULL;
-    if (thread_id < 0)
+    if (thread_id < 0) {
         el = config.el;
-    else {
-        benchmarkThread *thread = config.threads[thread_id % config.num_threads];
+        listAddNodeTail(config.clients, c);
+    } else {
+        assert(thread_id < config.num_threads);
+        benchmarkThread *thread = config.threads[thread_id];
         el = thread->el;
+        listAddNodeTail(thread->clients, c);
     }
     if (config.idlemode == 0) {
         if (config.ct == VALKEY_CONN_RDMA) {
@@ -3151,27 +3326,36 @@ static client createClient(char *cmd, int64_t len, int64_t seqlen, client from, 
         /* In idle mode, clients still need to register readHandler for catching errors */
         aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
 
-    listAddNodeTail(config.clients, c);
-    atomic_fetch_add_explicit(&config.liveclients, 1, memory_order_relaxed);
+    config.liveclients++;
 
     c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
     return c;
 }
 
-static void createMissingClients(client c) {
+// Thread create missing clients, round robin on the selected nodes 
+static void createMissingThreadClients(char *cmd, int64_t len, int64_t seqlen, benchmarkThread *thread, int64_t n_requested) {
+    int64_t missing_clients = n_requested - listLength(thread->clients);
     int64_t n = 0;
-    while (config.liveclients < config.numclients) {
-        int64_t thread_id = -1;
-        if (config.num_threads > 0) {
-            thread_id = config.liveclients % config.num_threads;
-        }
-        createClient(NULL, 0, 0, c, thread_id);
+    while (missing_clients > 0) {
+        createClient(cmd, len, seqlen, NULL, thread->index);
 
         /* Listen backlog is quite limited on most systems */
         if (++n > 64) {
             usleep(50000);
             n = 0;
         }
+        missing_clients--;
+    }
+}
+
+static void createMissingClients(char *cmd, int64_t len, int64_t seqlen) {
+    int64_t clients_per_thread = config.numclients;
+    if (config.num_threads > 0) {
+        clients_per_thread = (config.numclients + config.num_threads - 1) / config.num_threads;
+    }
+    for (int64_t thread_id = 0; thread_id < config.num_threads; thread_id++) {
+        benchmarkThread *thread = config.threads[thread_id];
+        createMissingThreadClients(cmd, len, seqlen, thread, clients_per_thread);
     }
 }
 
@@ -3317,8 +3501,6 @@ static mstime_t snapshot_time = 0;
 /* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
  * seqlen is the number of commands included in cmd. */
 static void benchmarkSequence(const char *title, char *cmd, int64_t len, int64_t seqlen) {
-    client c;
-
     config.title = title;
     config.requests_issued = 0;
     config.requests_finished = 0;
@@ -3366,58 +3548,28 @@ static void benchmarkSequence(const char *title, char *cmd, int64_t len, int64_t
             exit(1);
         }
         
-        /* Calculate quota per node per cycle
-         * The quota represents the maximum number of requests each node can handle per cycle.
-         * We base this on either:
-         * 1. If RPS is set: distribute RPS evenly across nodes for the cycle duration
-         * 2. Otherwise: use a heuristic based on clients * pipeline * cycle_duration
-         */
-        if (config.rps > 0) {
-            /* If RPS is set, divide it evenly among nodes and scale by cycle duration */
-            int64_t rps_per_node = config.rps / config.selected_node_count;
-            /* Convert cycle duration from ms to fraction of second, then multiply by RPS */
-            config.requests_per_node_per_cycle = (rps_per_node * config.balance_cycle_ms) / 1000;
-            if (config.requests_per_node_per_cycle == 0) {
-                config.requests_per_node_per_cycle = 1;
-            }
-        } else {
-            /* Without RPS limit, we want to enforce strict fairness.
-             * Set a quota that's small enough to force balance but large enough
-             * to not starve throughput. A good heuristic: allow each client
-             * on this node to issue 'pipeline' requests per cycle.
-             * 
-             * quota = (numclients / node_count) * pipeline
-             * 
-             * This ensures all nodes exhaust quota at roughly the same time. */
-            int64_t clients_per_node = (config.numclients + config.selected_node_count - 1) / config.selected_node_count;
-            config.requests_per_node_per_cycle = clients_per_node * config.pipeline;
-            
-            if (config.requests_per_node_per_cycle == 0) {
-                config.requests_per_node_per_cycle = 1; /* Minimum quota */
-            }
+        /* Allocate node request counters and quota arrays */
+        config.node_request_counters = zcalloc(sizeof(int64_t) * config.selected_node_count);
+        config.node_quota_remaining = zcalloc(sizeof(int64_t) * config.selected_node_count);
+        
+        /* Initialize each node with starting quota */
+        for (int64_t i = 0; i < config.selected_node_count; i++) {
+            config.node_request_counters[i] = 0;
+            config.node_quota_remaining[i] = config.balance_quota_step;
         }
         
-        /* Allocate node request counters */
-        config.node_request_counters = zcalloc(sizeof(atomic_uint_fast64_t) * config.selected_node_count);
-        
-        /* Initialize cycle start time (will be set on first request) */
-        atomic_store_explicit(&config.balance_cycle_start_ns, 0, memory_order_relaxed);
-        
         if (!config.quiet) {
-            printf("Node balancing enabled:\n");
+            printf("Node balancing enabled (quota-based):\n");
             printf("  Nodes: %ld\n", config.selected_node_count);
-            printf("  Quota per node: %ld requests per %ldms cycle\n",
-                   config.requests_per_node_per_cycle,
-                   config.balance_cycle_ms);
+            printf("  Quota per cycle: %ld requests per node\n", config.balance_quota_step);
+            printf("  Tolerance: %ld%%\n", config.balance_tolerance_pct);
             printf("  Total clients: %ld (%.1f per node)\n",
                    config.numclients,
                    (double)config.numclients / config.selected_node_count);
         }
     }
 
-    int64_t thread_id = config.num_threads > 0 ? 0 : -1;
-    c = createClient(cmd, len, seqlen, NULL, thread_id);
-    createMissingClients(c);
+    createMissingClients(cmd, len, seqlen);
     
     config.start = mstime();    
     if (!config.num_threads)
@@ -3512,7 +3664,7 @@ static void measureBaselineLatency(void) {
     
     /* Set to single-threaded, single-client for pure network measurement */
     config.numclients = 1;
-    config.num_threads = 0;
+    config.num_threads = 1;
     config.requests = 10000;
     config.quiet = 1;  /* Suppress all output during baseline measurement */
     config.csv = 0;    /* Don't output CSV for baseline */
@@ -3546,25 +3698,46 @@ static void measureBaselineLatency(void) {
     config.baseline_measured = 1;
 }
 
-/* Thread functions. */
 
+/* Thread functions. */
 static benchmarkThread *createBenchmarkThread(int64_t index) {
     benchmarkThread *thread = zcalloc(sizeof(*thread));
     if (thread == NULL) return NULL;
     thread->index = index;
     thread->el = aeCreateEventLoop(1024 * 10);
     thread->paused_clients = listCreate();
+    thread->clients = listCreate();
+    /* Allocate node request counters and quota arrays */
+    thread->node_request_counters = zcalloc(sizeof(atomic_uint_fast64_t) * config.selected_node_count);
+    thread->node_quota_remaining = zcalloc(sizeof(atomic_uint_fast64_t) * config.selected_node_count);
+
+    /* Initialize each node with starting quota */
+    for (int64_t i = 0; i < config.selected_node_count; i++) {
+        thread->node_quota_remaining[i] = config.balance_quota_step;
+    }
     /* Note: Recall statistics are aggregated globally and shown in main output,
      * not per-thread, since recall is computed across all queries. */
     aeCreateTimeEvent(thread->el, 1, showThroughput, (void *)thread, NULL);
     return thread;
 }
 
+
+
 static void freeBenchmarkThread(benchmarkThread *thread) {
     if (thread->el) aeDeleteEventLoop(thread->el);
+    // list merge
+    freeClientsList(thread->clients);
     listRelease(thread->paused_clients);
+    listRelease(thread->clients);
+
+    zfree(thread->node_request_counters);
+    zfree(thread->node_quota_remaining);
     zfree(thread);
 }
+
+
+
+
 
 static void freeBenchmarkThreads(void) {
     int64_t i = 0;
@@ -4533,13 +4706,27 @@ int parseOptions(int argc, char **argv) {
             config.rps = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--balance-nodes")) {
             config.balance_nodes = 1;
-        } else if (!strcmp(argv[i], "--balance-cycle-ms")) {
+        } else if (!strcmp(argv[i], "--balance-quota-step")) {
             if (lastarg) goto invalid;
-            config.balance_cycle_ms = atoi(argv[++i]);
-            if (config.balance_cycle_ms <= 0) {
-                fprintf(stderr, "Invalid balance cycle duration (must be > 0)\n");
+            config.balance_quota_step = atoi(argv[++i]);
+            if (config.balance_quota_step <= 0) {
+                fprintf(stderr, "Invalid balance quota step (must be > 0)\n");
                 exit(1);
             }
+        } else if (!strcmp(argv[i], "--balance-tolerance")) {
+            if (lastarg) goto invalid;
+            config.balance_tolerance_pct = atoi(argv[++i]);
+            if (config.balance_tolerance_pct < 0 || config.balance_tolerance_pct > 100) {
+                fprintf(stderr, "Invalid balance tolerance (must be 0-100)\n");
+                exit(1);
+            }
+        } else if (!strcmp(argv[i], "--test-balance")) {
+            /* Test node balancing algorithm with simulated latencies */
+            printf("Running node balance test...\n");
+            int64_t test_latencies[] = {3000, 1000, 3000, 5000, 550, 100, 9000};
+            int64_t num_test_nodes = sizeof(test_latencies) / sizeof(test_latencies[0]);
+            testNodeBalancing(test_latencies, num_test_nodes, 10); /* 10 second test */
+            exit(0);
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
             parseUri(argv[++i], "valkey-benchmark", &config.conn_info, &config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
@@ -5053,10 +5240,15 @@ usage:
         " -I                 Idle mode. Just open N idle connections and wait.\n"
         " -x                 Read last argument from STDIN.\n"
         " --rps <requests>   Limit the total number of requests per second. Default 0 (no limit)\n"
-        " --balance-nodes    Enable fair load distribution across cluster nodes.\n"
-        "                    Ensures each node gets equal quota per time cycle.\n"
-        " --balance-cycle-ms <ms> Time cycle duration for node balancing in milliseconds.\n"
-        "                    Default 1000ms. Only used with --balance-nodes.\n"
+        " --balance-nodes    Enable fair load distribution across cluster nodes using quota-based balancing.\n"
+        "                    Each node gets a quota of requests per cycle. When the slowest node\n"
+        "                    completes its quota, all nodes get refreshed quota and continue.\n"
+        " --balance-quota-step <num> Number of requests each node can process per cycle.\n"
+        "                    Default 1000. Only used with --balance-nodes.\n"
+        " --balance-tolerance <pct> Tolerance percentage for node imbalance (0-100).\n"
+        "                    Default 10. Only used with --balance-nodes.\n"
+        " --test-balance     Run node balancing algorithm test and exit.\n"
+        "                    Simulates nodes with different latencies to verify balancing.\n"
         " --seed <num>       Set the seed for random number generator. Default seed is based on time.\n"
         " --num-functions <num>\n"
         "                    Sets the number of functions present in the Lua lib that is\n"
@@ -5215,7 +5407,6 @@ int main(int argc, char **argv) {
     int64_t len;
     memset(&config, 0, sizeof(config));
     config.cluster_mode = -1; /* Unknown until detected */
-    client c;
 
     /* Configure libvalkey to use jemalloc allocators.
      * This ensures valkeyFormatCommand() and other libvalkey functions
@@ -5269,10 +5460,10 @@ int main(int argc, char **argv) {
     config.cluster_mode = 0;
     config.rps = 0;
     config.balance_nodes = 0;
-    config.balance_cycle_ms = 1000;  /* Default: 1 second cycles */
-    config.balance_cycle_start_ns = 0;
+    config.balance_quota_step = 1000;  /* Default: 1000 requests per cycle */
+    config.balance_tolerance_pct = 10;  /* Default: 10% tolerance */
     config.node_request_counters = NULL;
-    config.requests_per_node_per_cycle = 0;
+    config.node_quota_remaining = NULL;
     config.read_from_replica = FROM_PRIMARY_ONLY;
     config.cluster_node_count = 0;
     config.cluster_nodes = NULL;
@@ -5433,7 +5624,7 @@ int main(int argc, char **argv) {
         cliSecureInit();
     }
 #endif
-  
+
     /* Initialize base vector */
     initBaseVector(config.search.vector_dim);
     
@@ -5540,13 +5731,11 @@ int main(int argc, char **argv) {
 
     if (config.idlemode) {
         printf("Creating %ld idle connections and waiting forever (Ctrl+C when done)\n", config.numclients);
-        int64_t thread_id = -1, use_threads = (config.num_threads > 0);
+        int64_t use_threads = (config.num_threads > 0);
         if (use_threads) {
-            thread_id = 0;
             initBenchmarkThreads();
         }
-        c = createClient("", 0, 1, NULL, thread_id); /* will never receive a reply */
-        createMissingClients(c);
+        createMissingClients("", 0, 1);
         if (use_threads)
             startBenchmarkThreads();
         else
@@ -5554,20 +5743,6 @@ int main(int argc, char **argv) {
         /* and will wait for every */
     }
     
-    /* Measure baseline network latency (enabled by default unless --no-baseline) */
-    if (!config.no_baseline) {
-        measureBaselineLatency();
-    }
-    
-    if (config.csv) {
-        if (!config.no_baseline && baseline_latency.measured) {
-            printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
-                   "latency_ms\",\"max_latency_ms\",\"baseline_avg_ms\",\"baseline_p50_ms\",\"baseline_p95_ms\",\"baseline_p99_ms\"\n");
-        } else {
-            printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
-                   "latency_ms\",\"max_latency_ms\"\n");
-        }
-    }
     /* Run benchmark with command in the remainder of the arguments. */
     if (argc) {
         sds title = sdsnew(argv[0]);
@@ -5783,7 +5958,16 @@ int main(int argc, char **argv) {
             }
         }
     }
-    
+    if (config.csv) {
+        if (!config.no_baseline) {
+            printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
+                   "latency_ms\",\"max_latency_ms\",\"baseline_avg_ms\",\"baseline_p50_ms\",\"baseline_p95_ms\",\"baseline_p99_ms\"\n");
+        } else {
+            printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
+                   "latency_ms\",\"max_latency_ms\"\n");
+        }
+    }
+
     /* Initialize optimizer if enabled */
     if (config.optimize_enabled) {
         if (!config.optimize_objective) {
@@ -5830,11 +6014,6 @@ int main(int argc, char **argv) {
         
         /* Set optimization objective */
         parseOptimizerObjective(config.optimizer, config.optimize_objective);
-        
-        /* Measure baseline network latency (enabled by default unless --no-baseline) */
-        if (!config.no_baseline) {
-            measureBaselineLatency();
-        }
         
         /* Open CSV output file if specified */
         FILE *csv_file = NULL;
