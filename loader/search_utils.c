@@ -932,7 +932,7 @@ int isClusterModeEnabled(valkeyContext *ctx) {
         }
         if (reply) freeReplyObject(reply);
     }
-    
+    printf("Cluster Mode Enabled: %d\n", cluster_enabled);
     return cluster_enabled;
 }
 

@@ -86,7 +86,7 @@ static long long nstime(void) {
 #define CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE 3000000L /* <= 3 secs(us precision) */
 #define SHOW_THROUGHPUT_INTERVAL 250                        /* 250ms */
 
-#define CLIENT_GET_EVENTLOOP(c) (c->thread_id >= 0 ? config.threads[c->thread_id]->el : config.el)
+#define CLIENT_GET_EVENTLOOP(c) (c->thread_id >= 0 ? config.threads[c->thread_id%config.num_threads]->el : config.el)
 
 
 #define QUERY_VECTOR "query_vector"
@@ -227,21 +227,6 @@ Response:
 [STA]  Status: mutation_queue_size
 [STR]  0
 */
-/* struct to hold exact ft.info response data */
-typedef struct searchFtInfoResponse {
-    sds index_name;          /* Index name */
-    /* Index options, currently unused */
-    sds key_type;           /* Key type (e.g., HASH) */
-    sds* prefixes;           /* Key prefixes for the index */
-    int64_t prefixes_count; /* Number of prefixes */
-    sds default_score;      /* Default score for documents */
-    sds identifier;         /* Identifier for the index */
-    sds attribute;        /* Attributes of the index */
-    sds type;              /* Type of the index (e.g., VECTOR) */
-
-
-} searchFtInfoResponse;
-
 
 /* Tag distribution structure */
 typedef struct tagDistribution {
@@ -256,6 +241,7 @@ typedef struct searchRuntimeConfig {
     int64_t n_dists;               /* Number of distributions */
     sds tag_filter;                      /* Filter pattern for queries */
 } searchRuntimeConfig;
+
 /* Search index configuration */
 typedef struct searchIndex {
     sds name;               /* Index name */
@@ -1555,7 +1541,7 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
 }
 
 int isSelected(int64_t is_primary) {
-    if ((config.read_from_replica == FROM_REPLICA_ONLY && is_primary) || 
+    if (((config.read_from_replica == FROM_REPLICA_ONLY) && is_primary) || 
         ((config.read_from_replica == FROM_PRIMARY_ONLY) && !is_primary)) {
         return 0;
     }
@@ -2460,7 +2446,7 @@ static void replacePlaceholders(client c, char *cmd_data, int64_t cmd_count) {
 
 static void releasePausedClient(client c) {
     if (c->thread_id >= 0) {
-        benchmarkThread *thread = config.threads[c->thread_id];
+        benchmarkThread *thread = config.threads[c->thread_id % config.num_threads];
         listNode *ln = listSearchKey(thread->paused_clients, c);
         if (ln != NULL) {
             listDelNode(thread->paused_clients, ln);
@@ -2788,7 +2774,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 paused_clients_count = listLength(config.paused_clients);
                 listAddNodeTail(config.paused_clients, c);
             } else {
-                thread = config.threads[thread_id];
+                thread = config.threads[thread_id % config.num_threads];
                 paused_clients_count = listLength(thread->paused_clients);
                 listAddNodeTail(thread->paused_clients, c);
             }
@@ -2867,7 +2853,6 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 static client createClient(char *cmd, int64_t len, int64_t seqlen, client from, int64_t thread_id) {
     int64_t is_cluster_client = (config.cluster_mode && thread_id >= 0);
     client c = zcalloc(sizeof(struct _client));
-
     const char *ip = config.conn_info.hostip;
     int port = config.conn_info.hostport;
     struct timeval tv = {0};
@@ -2875,15 +2860,15 @@ static client createClient(char *cmd, int64_t len, int64_t seqlen, client from, 
         /* If the user specified a list of nodes, use them in a round-robin
          * fashion. */
         int64_t node_idx = 0;
-        if (config.num_threads < config.selected_node_count)
-            node_idx = (config.liveclients + 10007) % config.selected_node_count;
-        else
-            node_idx = (ustime() + thread_id) % config.selected_node_count;
+        /* Simple round-robin based on client count */
+        node_idx = config.liveclients % config.selected_node_count;
         clusterNode *node = config.selected_nodes[node_idx];
         assert(node != NULL);
         ip = node->ip;
         port = node->port;
         c->cluster_node = node;
+        printf("DEBUG: Created client %ld -> node %ld (%s:%d), thread_id=%ld\n", 
+               config.liveclients, node_idx, ip, port, thread_id);
     } 
 
     c->context = valkeyConnectWrapper(config.ct, ip, port, tv, 1, config.mptcp);
@@ -3017,7 +3002,7 @@ static client createClient(char *cmd, int64_t len, int64_t seqlen, client from, 
     if (thread_id < 0)
         el = config.el;
     else {
-        benchmarkThread *thread = config.threads[thread_id];
+        benchmarkThread *thread = config.threads[thread_id % config.num_threads];
         el = thread->el;
     }
     if (config.idlemode == 0) {
@@ -3041,7 +3026,9 @@ static void createMissingClients(client c) {
     int64_t n = 0;
     while (config.liveclients < config.numclients) {
         int64_t thread_id = -1;
-        if (config.num_threads) thread_id = config.liveclients % config.num_threads;
+        if (config.num_threads > 0) {
+            thread_id = config.liveclients % config.num_threads;
+        }
         createClient(NULL, 0, 0, c, thread_id);
 
         /* Listen backlog is quite limited on most systems */
@@ -3873,6 +3860,7 @@ static int64_t fetchClusterConfiguration(void) {
     line = strtok_r(nodes_str, "\n", &saveptr);
     
     while (line != NULL) {
+        printf("Parsing CLUSTER NODES line: %s\n", line);
         /* Parse: <id> <ip:port@cport> <flags> <master-id> <ping> <pong> <epoch> <state> <slots...> */
         char node_id[128], addr[256], flags[256], master_id[128];
         int64_t ping_sent, pong_recv, config_epoch;
