@@ -398,7 +398,6 @@ static struct config {
     atomic_uint_fast64_t balance_cycle_start_ns; /* Current cycle start time (nanoseconds) */
     atomic_uint_fast64_t *node_request_counters;  /* Array of request counts per node */
     int64_t requests_per_node_per_cycle;         /* Quota: numclients/selected_node_count */
-    int64_t balance_nodes_active;    /* Flag: 0 during setup, 1 during actual benchmark */
     int64_t clean;
     int64_t use_search; /* Use search indexes */
     searchIndex search;
@@ -2861,11 +2860,11 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
      * We activate node balancing only when benchmark requests start being issued.
      * This excludes all setup phases: init, info fetch, backfill, prefill, etc. */
     if (config.balance_nodes && config.node_request_counters && c->cluster_node) {
-        /* Activate node balancing on first benchmark request
-         * We know benchmark has started when requests_issued > 0 and prefix commands are done */
+        /* Only apply balancing once actual benchmark requests start
+         * (requests_issued > 0 means benchmark started, prefix_pending == 0 means setup done) */
         int64_t requests_issued = atomic_load_explicit(&config.requests_issued, memory_order_relaxed);
         
-        if (requests_issued > 0 && c->prefix_pending == 0 && config.balance_nodes_active) {
+        if (requests_issued > 0 && c->prefix_pending == 0) {
             int64_t node_idx = findNodeIndex(c->cluster_node);
             if (node_idx >= 0) {
                 long long delay = acquireNodeTokenOrWait(node_idx, config.pipeline);
@@ -3362,7 +3361,6 @@ static void benchmarkSequence(const char *title, char *cmd, int64_t len, int64_t
     /* Initialize node balancing if enabled
      * Skip during internal operations like baseline measurement */
     if (config.balance_nodes && !config.skip_latency_report) {
-        printf("DEBUG: Initializing node balancing (selected_node_count=%ld)\n", config.selected_node_count);
         if (config.selected_node_count == 0) {
             fprintf(stderr, "Error: --balance-nodes requires cluster mode with selected nodes\n");
             exit(1);
@@ -3421,22 +3419,11 @@ static void benchmarkSequence(const char *title, char *cmd, int64_t len, int64_t
     c = createClient(cmd, len, seqlen, NULL, thread_id);
     createMissingClients(c);
     
-    /* Activate node balancing NOW - right before benchmark starts
-     * All init/setup/prefill phases are done, actual benchmark requests will start */
-    if (config.balance_nodes) {
-        config.balance_nodes_active = 1;
-        if (!config.quiet) {
-            printf("Node balancing activated (benchmark starting)\n");
-        }
-    }
-    
     config.start = mstime();    
     if (!config.num_threads)
         aeMain(config.el);
     else
         startBenchmarkThreads();
-    
-    /* Activate node balancing on first real request by checking prefix_pending */
     
     config.totlatency = mstime() - config.start;
     if (config.use_search) {
@@ -5286,7 +5273,6 @@ int main(int argc, char **argv) {
     config.balance_cycle_start_ns = 0;
     config.node_request_counters = NULL;
     config.requests_per_node_per_cycle = 0;
-    config.balance_nodes_active = 0;  /* Inactive until benchmark starts */
     config.read_from_replica = FROM_PRIMARY_ONLY;
     config.cluster_node_count = 0;
     config.cluster_nodes = NULL;

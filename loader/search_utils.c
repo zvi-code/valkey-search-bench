@@ -1722,7 +1722,7 @@ clusterSnapshot* createClusterSnapshot(const char *command,
                                                         is_replica ? 'R' : 'P');
         }
         
-        valkeyContext *ctx = node->ctx ? node->ctx : getValkeyContext(ct, node->ip, node->port);
+        valkeyContext *ctx = getValkeyContext(ct, node->ip, node->port);
         assert(ctx != NULL);
         
         valkeyReply *reply = valkeyCommand(ctx, command);
@@ -1782,6 +1782,7 @@ clusterSnapshot* createClusterSnapshot(const char *command,
         }
         
         freeReplyObject(reply);
+        valkeyFree(ctx);
     }
     
     /* Store aggregated values */
