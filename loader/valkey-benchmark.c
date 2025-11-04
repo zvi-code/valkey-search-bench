@@ -1941,17 +1941,17 @@ static int64_t createSearchHsetTemplate(char **cmd) {
     setArg(argv, argvlen, &argc, vector_binary, sdslen(vector_binary));     
     // print the command for debugging
     // if (config.search_debug) {
-        printf("DEBUG: Generated HSET command with %ld args:\n", argc);
-        for (int64_t i = 0; i < argc; i++) {
-            printf("  Arg %ld: %.*s\n", i, (int)argvlen[i], argv[i]);
-        }
+        // printf("DEBUG: Generated HSET command with %ld args:\n", argc);
+        // for (int64_t i = 0; i < argc; i++) {
+        //     printf("  Arg %ld: %.*s\n", i, (int)argvlen[i], argv[i]);
+        // }
     // }
     int64_t len = valkeyFormatCommandArgv(cmd, argc, argv, argvlen);
     // print the final command string for debugging
     // if (config.search_debug) {
-        printf("DEBUG: Final HSET command string (length %ld):\n", len);
-        fwrite(*cmd, 1, len, stdout);
-        printf("\n");
+        // printf("DEBUG: Final HSET command string (length %ld):\n", len);
+        // fwrite(*cmd, 1, len, stdout);
+        // printf("\n");
     // }
     /* Cleanup allocated strings */
     sdsfree(key);
@@ -6154,7 +6154,7 @@ int main(int argc, char **argv) {
         } else if (config.cluster_mode == 0) {
             cluster_mode_str = "CMD (Cluster Mode Disabled)";
         }
-        createSearchHsetTemplate(&cmd);
+        // createSearchHsetTemplate(&cmd);
         printf("Using search indexes for the benchmark. %s - %s\n", 
                config.engine_type == ENGINE_TYPE_MEMORYDB ? "MemoryDB" : config.engine_type == ENGINE_TYPE_ELASTICACHE_VALKEY ? "EC Valkey" : "OSS",
                cluster_mode_str);
