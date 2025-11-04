@@ -2519,6 +2519,7 @@ static void freeAllClients(void) {
 
 static void resetClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
+    if (c->paused) releasePausedClient(c);
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
     if (config.ct == VALKEY_CONN_RDMA) {
@@ -3591,9 +3592,9 @@ static void benchmarkSequence(const char *title, char *cmd, int64_t len, int64_t
         after_info_all = getInfoCluster(config.selected_node_count, config.selected_nodes, config.ct);
         if (last_info_all != NULL && last_ftinfo != NULL && last_search_info != NULL) {
             // Compare snapshots and print diffs
-        }
-        compareInfoSnapshots(config.selected_node_count, config.selected_nodes, config.ct,
+            compareInfoSnapshots(config.selected_node_count, config.selected_nodes, config.ct,
                              last_info_all, after_info_all, last_ftinfo, after_ftinfo, last_search_info, after_search_info);
+        }
         freeClusterSnapshot(last_search_info);
         freeClusterSnapshot(last_ftinfo);
         freeClusterSnapshot(last_info_all);
@@ -3708,8 +3709,8 @@ static benchmarkThread *createBenchmarkThread(int64_t index) {
     thread->paused_clients = listCreate();
     thread->clients = listCreate();
     /* Allocate node request counters and quota arrays */
-    thread->node_request_counters = zcalloc(sizeof(atomic_uint_fast64_t) * config.selected_node_count);
-    thread->node_quota_remaining = zcalloc(sizeof(atomic_uint_fast64_t) * config.selected_node_count);
+    thread->node_request_counters = zcalloc(sizeof(int64_t) * config.selected_node_count);
+    thread->node_quota_remaining = zcalloc(sizeof(int64_t) * config.selected_node_count);
 
     /* Initialize each node with starting quota */
     for (int64_t i = 0; i < config.selected_node_count; i++) {
@@ -5902,19 +5903,11 @@ int main(int argc, char **argv) {
         printf("Using search indexes for the benchmark. %s - %s\n", 
                config.engine_type == ENGINE_TYPE_MEMORYDB ? "MemoryDB" : config.engine_type == ENGINE_TYPE_ELASTICACHE_VALKEY ? "EC Valkey" : "OSS",
                cluster_mode_str);
-       
-        // int64_t num_indexes = 1;
-        // char* index_names[2] = {config.search.name, NULL};
-        // sds flat_index = sdsnew(config.search.name);        
-        // flat_index = sdscat(flat_index, "_flat");               
-        // const char* index_names[2] = {config.search.name, flat_index};
-        // int64_t num_indexes = 2;
 
         createDefaultSearchIndexes();
         sleep(2); /* wait a bit before checking index status */
         waitForIndexBackfillComplete(config.engine_type, config.selected_node_count, config.selected_nodes, config.ct, (const char**)&config.search.name, 1);
-        // wait for flat indexes
-        // sdsfree(flat_index);
+
         long long search_memory = 0;
         long long search_reclaimable = 0;
         long long search_total_docs = 0;

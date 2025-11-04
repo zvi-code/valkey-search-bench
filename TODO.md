@@ -145,6 +145,8 @@ This document tracks planned enhancements and feature ideas for the valkey-searc
 **Description:** Enhance the workload distribution mechanism in both Cluster Mode Enabled (CME) and Cluster Mode Disabled (CMD) to ensure more balanced resource utilization across nodes.
 **Benefits:** Optimizes performance and resource usage, reducing the risk of bottlenecks and improving overall system efficiency.
 
+### 33. When Ctrl+c is pressed when running load, generate output for the so far execution
+
 ------
 ## Search Quality Metrics Enhancements
 ### Add additional search results quality metrics
@@ -289,5 +291,13 @@ When implementing any of these features:
 
 ---
 
+## Commands examples
+```
+/home/ubuntu/valkey-search-benchmark/build-debug/bin/valkey-benchmark -h $HOST --rfr all  --dataset /home/ubuntu/valkey-search-benchmark/datasets/openai-large-5m.bin -t vec-query --search --vector-dim 1536 --search-name openai-large-5m-5M-1536-100 --search-prefix zvec_openai5m: -n 60000 -c 800 --ef-search 256 --nocontent --no-save-config --k 100  --balance-nodes --balance-quota-step 10000 --threads 10 --runtime-config "./16xl-ec2.conf"
+```
+
+```
+/home/ubuntu/valkey-search-benchmark/build-debug/bin/valkey-benchmark -h $HOST --rfr no --dataset /home/ubuntu/valkey-search-benchmark/datasets/openai-large-5m.bin -t vec-load --search --vector-dim 1536 --search-name openai-large-5m-5M-1536-100 --search-prefix zvec_openai5m: -n 5000000 -c 440 --m 16 --ef-construction 256 --nocontent
+```
 
 *Last Updated: October 21, 2025*
