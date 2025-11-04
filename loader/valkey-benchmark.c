@@ -767,13 +767,14 @@ static int64_t encode_vector_key_fixed(char *key_out, size_t key_out_size,
     key_write_len--;
     // Vector ID placeholder length check
     assert(12 == PLACEHOLDERS[DATASET_KEY_PLACEHOLDER_INDEX].len);
-    // Encode vector ID with fixed width
-    ret = snprintf(key_out, key_out_size+1, "%012lu",
-                        (unsigned long)vector_id);
+    // Encode vector ID with fixed width - format directly to avoid null terminator
+    char temp_buf[13];  // 12 digits + null terminator
+    ret = snprintf(temp_buf, sizeof(temp_buf), "%012lu", (unsigned long)vector_id);
+    assert(ret == 12);  // Should be exactly 12 characters
+    memcpy(key_out, temp_buf, 12);  // Copy without null terminator
     // printf("DEBUG: format='%s', encoded result='%.*s', ret=%ld\n",
     //        format, (int64_t)vector_id_len, p, ret);
-    assert(ret == key_write_len); // Should fit exactly
-    assert(key_out[key_write_len] == '\0');
+    assert(ret == (int64_t)key_write_len); // Should fit exactly
     return (ret >= 0 && ret <= (int64_t)key_write_len) ? 0 : -1;
 }
 
@@ -832,6 +833,159 @@ static int64_t decode_vector_key_fixed(const char *key,
 }
 
 /**
+ * Grow an sds string to a specified length, filling new space with a non-zero character.
+ * 
+ * Similar to sdsgrowzero, but fills with a specified character instead of null bytes.
+ * This is useful for creating padding that won't be misinterpreted as string terminators.
+ * 
+ * @param s The sds string to grow (will be reallocated if needed)
+ * @param len The target length
+ * @param fill_char The character to fill new space with (e.g., ' ' for space)
+ * @return The grown sds string (may be different pointer than input)
+ */
+static sds sdsgrownonzero(sds s, size_t len, char fill_char) {
+    size_t curlen = sdslen(s);
+    
+    if (len <= curlen) {
+        return s;  /* Already at or past target length */
+    }
+    
+    /* Grow to target length (initially filled with zeros) */
+    s = sdsgrowzero(s, len);
+    
+    /* Replace zeros with fill character in the newly allocated space */
+    memset(s + curlen, fill_char, len - curlen);
+    
+    return s;
+}
+
+/**
+ * Check a buffer for null terminators and optionally report their positions.
+ * 
+ * @param buffer The buffer to check
+ * @param buffer_len Length of the buffer
+ * @param context_name Name to use in debug output (e.g., "tag section", "dummy section")
+ * @param verbose If true, print positions of null bytes found
+ * @return Number of null bytes found
+ */
+static int checkBufferForNulls(const char* buffer, int64_t buffer_len, 
+                                const char* context_name, int verbose) {
+    int null_count = 0;
+    
+    if (verbose) {
+        /* Collect positions for verbose output */
+        for (int64_t i = 0; i < buffer_len; i++) {
+            if (buffer[i] == '\0') {
+                if (null_count == 0) {
+                    fprintf(stderr, "WARNING: Found null terminators in %s at positions:", context_name);
+                }
+                fprintf(stderr, " %ld", i);
+                null_count++;
+            }
+        }
+        
+        if (null_count > 0) {
+            fprintf(stderr, " (total %d null bytes)\n", null_count);
+        }
+    } else {
+        /* Just count without verbose output */
+        for (int64_t i = 0; i < buffer_len; i++) {
+            if (buffer[i] == '\0') {
+                null_count++;
+            }
+        }
+    }
+    
+    return null_count;
+}
+
+/**
+ * Generate RESP bulk string encoding for a field value.
+ * 
+ * Creates a proper RESP encoded bulk string: $<len>\r\n<data>\r\n
+ * 
+ * @param data The data to encode (can be NULL for empty string)
+ * @param data_len Length of the data
+ * @return sds string containing the RESP encoding (caller must free)
+ */
+static sds encodeRespBulkString(const char* data, int64_t data_len) {
+    sds resp = sdsempty();
+    
+    /* Format: $<length>\r\n<data>\r\n */
+    resp = sdscatprintf(resp, "$%ld\r\n", data_len);
+    
+    if (data_len > 0) {
+        if (data != NULL) {
+            resp = sdscatlen(resp, data, data_len);
+        } else {
+            /* Use sdsgrownonzero to create padding filled with spaces (not null bytes) */
+            sds padding = sdsempty();
+            padding = sdsgrownonzero(padding, data_len, ' ');
+            resp = sdscatsds(resp, padding);
+            sdsfree(padding);
+        }
+    }
+    
+    resp = sdscatlen(resp, "\r\n", 2);
+    
+    return resp;
+}
+
+/**
+ * Calculate the value length needed to fill exactly target_bytes with RESP encoding.
+ * 
+ * Given a target number of bytes, finds the value length V such that:
+ *   $<len(V)>\r\n<V bytes>\r\n == target_bytes
+ * 
+ * This equation may not have a solution at digit boundaries (e.g., when going from
+ * 9 to 10, the length encoding grows by 1 digit).
+ * 
+ * @param target_bytes The exact number of bytes the RESP encoding should occupy
+ * @param solution_found Output parameter: set to 1 if exact solution found, 0 otherwise
+ * @return The value length, or -1 if no solution exists
+ */
+static int64_t calculateValueLengthForRespSize(int64_t target_bytes, int *solution_found) {
+    *solution_found = 0;
+    
+    /* Minimum RESP encoding: $0\r\n\r\n = 6 bytes */
+    if (target_bytes < 6) {
+        return -1;
+    }
+    
+    /* The equation: target_bytes = 1($) + digits + 2(\r\n) + value_len + 2(\r\n) */
+    /* Simplified: target_bytes = 5 + digits + value_len */
+    /* where digits = number of digits in value_len */
+    
+    /* We need to find value_len such that: value_len + digit_count(value_len) = target_bytes - 5 */
+    
+    int64_t target_sum = target_bytes - 5;
+    
+    /* Start with an estimate: assume 1 digit */
+    int64_t value_len = target_sum - 1;
+    
+    /* Iterate to find the correct value */
+    for (int attempts = 0; attempts < 10; attempts++) {
+        if (value_len < 0) {
+            return -1;
+        }
+        
+        int64_t digit_count = snprintf(NULL, 0, "%ld", value_len);
+        int64_t actual_sum = value_len + digit_count;
+        
+        if (actual_sum == target_sum) {
+            *solution_found = 1;
+            return value_len;
+        } else if (actual_sum < target_sum) {
+            value_len += (target_sum - actual_sum);
+        } else {
+            value_len -= (actual_sum - target_sum);
+        }
+    }
+    
+    return -1;
+}
+
+/**
  * Replace tag field with new tag value and adjust RESP lengths using dummy padding field.
  * 
  * This function implements the "dummy field as byte sink" strategy for tag fields,
@@ -844,21 +998,25 @@ static int64_t decode_vector_key_fixed(const char *key,
  *   <HSET key tag_field>$1024\r\n[1024 bytes]\r\n
  * 
  * After adjustment (3-byte tag "red"):
- *   - Padding total length = 1024 - 3 = 1021
- *   - Padding payload = 1021 - 2(\r\n) - len("__padding__"=11) - 4(length encoding) - 1(space) = 1003
- *   Result: <HSET key tag_field>$0003\r\nred\r\n __padding__ $1003\r\n[1003 gap]\r\n
+ *   - Generate proper RESP encoding for tag: $3\r\nred\r\n (length Tm)
+ *   - Copy Tm bytes to start of reserved space
+ *   - Calculate remaining bytes: M - Tm
+ *   - Generate dummy field key: " __padding__ " (length Tdk)
+ *   - Solve for dummy value length V such that RESP encoding fits exactly: M - Tm - Tdk
+ *   - If unsolvable (digit boundary issue), adjust dummy key
+ *   Result: <HSET key tag_field>$3\r\nred\r\n __padding__ $1007\r\n[1007 bytes]\r\n
  * 
- * This keeps total buffer size fixed while allowing the server to properly parse the command.
+ * This keeps total buffer size fixed while using proper RESP encoding (no leading zeros).
  * The dummy field value is never used - it just consumes the gap bytes.
  * 
  * @param payload_start Pointer to the start of the tag payload data (after \r\n following the length)
- * @param header_len Length of the length field (number of digits after '$') - always 4 for padding
+ * @param header_len Length of the original length field (number of digits after '$')
  * @param payload_template_len Original/template payload length (total allocated space for tag)
  * @param tag_data The tag string to copy (can be NULL for empty tag)
  * @param tag_len Length of the tag data (0 for empty tag)
  * 
  * Requirements:
- * - header_len must be large enough to represent tag_len with leading zeros
+ * - header_len must be large enough to represent tag_len
  * - The buffer must have space for: $ + header_len + \r\n + payload_template_len + \r\n
  * - tag_len must be <= payload_template_len
  * - Function creates __padding__ field dynamically in remaining space
@@ -870,84 +1028,106 @@ static void replaceTagFieldWithPadding(char* payload_start, int64_t header_len,
     assert(payload_start != NULL);
     assert(header_len > 0);
     
-    /* Verify tag_len can be represented with header_len digits */
-    int64_t tag_len_digits = tag_len > 0 ? snprintf(NULL, 0, "%ld", tag_len) : 1;
-    (void)tag_len_digits; /* Used in assert */
-    assert(tag_len_digits <= header_len);
+    /* Calculate total reserved space M (includes RESP encoding) */
+    /* Layout: $<header_len digits>\r\n<payload_template_len bytes>\r\n */
+    int64_t M = 1 + header_len + 2 + payload_template_len + 2;
     
-    /* Copy tag data to payload area */
-    if (tag_len > 0 && tag_data != NULL) {
-        memcpy(payload_start, tag_data, tag_len);
+    /* Calculate RESP buffer start by counting backwards from payload start */
+    char *buffer_start = payload_start - (header_len + 3);
+    assert(*buffer_start == '$');
+    
+    /* Step 1: Generate RESP encoding for the tag field */
+    sds tag_resp = encodeRespBulkString(tag_data, tag_len);
+    int64_t Tm = sdslen(tag_resp);
+    
+
+
+    /* Verify tag encoding fits in reserved space */
+    assert(Tm <= M);
+    
+    /* Step 2: Copy tag encoding to start of reserved space */
+    memcpy(buffer_start, tag_resp, Tm);
+    sdsfree(tag_resp);
+    
+    // /* Debug: Check for null terminators in the tag section */
+    // int tag_null_count = checkBufferForNulls(buffer_start, Tm, "tag section", 0);
+    // if (tag_null_count == 0) {
+    //     fprintf(stderr, "DEBUG: No null terminators found in buffer after tag copy (Tm=%ld)\n", Tm);
+    // } else {
+    //     fprintf(stderr, "WARNING: Found %d null terminators in tag section (Tm=%ld)\n", tag_null_count, Tm);
+    // }
+    
+    /* Step 3: Calculate remaining space for dummy field */
+    int64_t remaining = M - Tm;
+    
+    /* If no space remaining, we're done */
+    if (remaining == 0) {
+        return;
+    }
+        /* DEBUG */
+    fprintf(stderr, "DEBUG replaceTagFieldWithPadding: M=%ld, header_len=%ld, payload_template_len=%ld, tag=%s, tag_len=%ld, Tm=%ld\n",
+            M, header_len, payload_template_len, tag_data, tag_len, Tm);
+    /* Step 4: Try to create dummy field with " __padding__ " key */
+    /* Format: " __padding__ $<len>\r\n<value>\r\n" */
+    const char *dummy_key = " __padding__ ";
+    int64_t Tdk_base = strlen(dummy_key);
+    
+    /* Calculate space needed for dummy value RESP encoding */
+    int64_t value_resp_space = remaining - Tdk_base;
+    
+    /* Try to solve for value length */
+    int solution_found = 0;
+    int64_t dummy_value_len = calculateValueLengthForRespSize(value_resp_space, &solution_found);
+    
+    /* If no solution found, try shortening the dummy key by one character */
+    if (!solution_found && Tdk_base > 1) {
+        /* Try " __padding_" (remove one underscore) */
+        dummy_key = " __padding_";
+        Tdk_base = strlen(dummy_key);
+        value_resp_space = remaining - Tdk_base;
+        dummy_value_len = calculateValueLengthForRespSize(value_resp_space, &solution_found);
+        
+        /* If still no solution, try " __padding" */
+        if (!solution_found && Tdk_base > 1) {
+            dummy_key = " __padding";
+            Tdk_base = strlen(dummy_key);
+            value_resp_space = remaining - Tdk_base;
+            dummy_value_len = calculateValueLengthForRespSize(value_resp_space, &solution_found);
+        }
     }
     
-    /* Calculate RESP header start by counting backwards from payload start
-     * Layout: $<header_len digits>\r\n<payload>
-     * So we go back: header_len + 3 bytes (for $ + \r\n) */
-    char *resp_start = payload_start - (header_len + 3);
-    
-    /* Verify we're at the RESP bulk string marker */
-    assert(*resp_start == '$');
-    
-    /* Verify the \r\n after the header is in place (should be just before payload_start) */
-    assert(resp_start[1 + header_len] == '\r');
-    assert(resp_start[1 + header_len + 1] == '\n');
-    
-    /* Calculate how many bytes we're no longer using */
-    int64_t unused_bytes = payload_template_len - tag_len;
-    
-    /* Update the tag field length with leading zeros to maintain fixed width */
-    char length_str[32];
-    int64_t written = snprintf(length_str, sizeof(length_str), "%0*ld", (int)header_len, tag_len);
-    (void)written; /* Used in assert */
-    assert(written == header_len); /* Ensure we didn't overflow the header length */
-    
-    /* Write the new length after the '$' */
-    memcpy(resp_start + 1, length_str, header_len);
-    
-    /* Place \r\n immediately after the tag data */
-    char *tag_terminator_pos = payload_start + tag_len;
-    tag_terminator_pos[0] = '\r';
-    tag_terminator_pos[1] = '\n';
-    
-    /* 
-     * CREATE the __padding__ field dynamically in the remaining space.
-     * 
-     * Layout after tag field:
-     *   \r\n __padding__ $XXXX\r\n[gap bytes]\r\n
-     * 
-     * Calculation (using 4-byte length encoding for padding):
-     *   - unused_bytes = payload_template_len - tag_len (includes space for \r\n after tag)
-     *   - Subtract: 2 (\r\n) + 1 (space) + 11 ("__padding__") + 1 ($) + 4 (length) + 2 (\r\n)
-     *   - Padding payload = unused_bytes - 21
-     * 
-     * Example: tag="red" (3 bytes), template=1024
-     *   - unused = 1024 - 3 = 1021
-     *   - padding_payload = 1021 - 2 - 1 - 11 - 1 - 4 - 2 = 1000
-     * 
-     * Wait, recalculating per user's example:
-     *   - padding total = 1024 - 3 = 1021
-     *   - padding payload = 1021 - 2(\r\n) - 11(__padding__) - 4(len) - 1(space) = 1003
-     *   - So overhead = 1021 - 1003 = 18 (the final \r\n is part of gap bytes)
-     */
-    const int64_t PADDING_OVERHEAD = 18; /* space + "__padding__" + $ + 4-digit-len + \r\n before payload */
-    
-    if (unused_bytes > PADDING_OVERHEAD) {
-        char *padding_start = tag_terminator_pos + 2; /* After \r\n */
+    /* If we found a solution, write the dummy field */
+    if (solution_found && dummy_value_len >= 0) {
+        char *dummy_start = buffer_start + Tm;
         
-        /* Write: " __padding__ $XXXX\r\n" */
-        int64_t padding_payload_len = unused_bytes - PADDING_OVERHEAD;
+        /* Write dummy key */
+        memcpy(dummy_start, dummy_key, Tdk_base);
         
-        int64_t padding_header_written = snprintf(padding_start, unused_bytes,
-                                             " __padding__ $%04ld\r\n", 
-                                             padding_payload_len);
-        (void)padding_header_written; /* Used in assert */
+        /* Generate and write dummy value RESP encoding */
+        sds dummy_value_resp = encodeRespBulkString(NULL, dummy_value_len);
+        int64_t dummy_value_resp_len = sdslen(dummy_value_resp);
         
-        /* Verify we wrote exactly what we expected (space + __padding__ + space + $ + 4 digits + \r\n = 19 chars) */
-        assert(padding_header_written == 19);
+        memcpy(dummy_start + Tdk_base, dummy_value_resp, dummy_value_resp_len);
+        sdsfree(dummy_value_resp);
         
-        /* The gap bytes (padding payload) already exist in the buffer.
-         * The server will read padding_payload_len bytes and discard them.
-         * The final \r\n is already part of the gap bytes. */
+        // /* Debug: Check for null terminators in the dummy section */
+        // int dummy_null_count = checkBufferForNulls(buffer_start + Tm, M - Tm, 
+        //                                              "dummy section", 1);
+        // if (dummy_null_count == 0) {
+        //     fprintf(stderr, "DEBUG: No null terminators found in buffer dummy section (range [%ld, %ld))\n", Tm, M);
+        // }
+        
+        /* Verify we used exactly M bytes */
+        int64_t total_used = Tm + Tdk_base + dummy_value_resp_len;
+        // fprintf(stderr, "DEBUG: total_used=%ld, M=%ld, Tm=%ld, Tdk_base=%ld, dummy_value_resp_len=%ld, dummy_value_len=%ld\n",
+        //         total_used, M, Tm, Tdk_base, dummy_value_resp_len, dummy_value_len);
+        
+        (void)total_used; /* Used in assert */
+        assert(total_used == M);
+    } else {
+        /* This shouldn't happen with reasonable buffer sizes, but log if it does */
+        /* For now, just leave the buffer partially filled */
+        fprintf(stderr, "Warning: Could not find exact fit for dummy padding field (remaining=%ld)\n", remaining);
     }
 }
 
@@ -1699,12 +1879,17 @@ static sds getSearchKeyTemplate(void) {
 
 // build tag that is of length config.search.payload_tag_len and starts with PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].name
 static sds createTagTemplate(void) {
+    // create DUMMY sds string with 'Z' char pattern of length config.search.payload_tag_len - PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].len
+    sds dummy_str = sdsgrowzero(sdsempty(), config.search.payload_tag_len - PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].len);
+    memset(dummy_str, 'Z', config.search.payload_tag_len - strlen(PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].name));
+
     // create a string of len config.search.payload_tag_len that has repeating 'SHOULD-REPLACE' pattern
-    sds tag = sdsnewlen("", config.search.payload_tag_len);
-    snprintf(tag, config.search.payload_tag_len, "%s", PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].name);
-    memset(tag + strlen(PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].name), 'Z', config.search.payload_tag_len - strlen(PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].name) - 1);
-    tag[config.search.payload_tag_len] = '\0'; // null terminate
+    sds tag = sdscatprintf(sdsempty(), "%s%s", PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].name, dummy_str);
+    // tag = sdsgrowzero(tag, config.search.payload_tag_len);
+    printf("DEBUG: Created tag template: %s (len %zu) (expected len %zu) taglen %zu\n", tag, sdslen(tag), config.search.payload_tag_len, PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].len);
+
     assert(sdslen(tag) == config.search.payload_tag_len);
+    sdsfree(dummy_str);
     return tag;
 }
 
@@ -1733,10 +1918,7 @@ static int64_t createSearchHsetTemplate(char **cmd) {
     /* Command and key */
     setArg(argv, argvlen, &argc, "HSET", 4);
     setArg(argv, argvlen, &argc, key, sdslen(key));
-    
-    /* Vector field (always present) */
-    setArg(argv, argvlen, &argc, config.search.vector_field, strlen(config.search.vector_field));
-    setArg(argv, argvlen, &argc, vector_binary, sdslen(vector_binary));    
+       
     /* Tag field (optional) - can be extended to support multiple tag fields
      * Future: could loop through an array of tag fields */
     sds selected_tag = NULL;
@@ -1753,9 +1935,24 @@ static int64_t createSearchHsetTemplate(char **cmd) {
         setArg(argv, argvlen, &argc, config.search.numeric_field, strlen(config.search.numeric_field));
         setArg(argv, argvlen, &argc, PLACEHOLDERS[DATASET_NUMERIC_SCORE_PLACEHOLDER_INDEX].name, PLACEHOLDERS[DATASET_NUMERIC_SCORE_PLACEHOLDER_INDEX].len);
     }
-    
+
+    /* Vector field (always present) */
+    setArg(argv, argvlen, &argc, config.search.vector_field, strlen(config.search.vector_field));
+    setArg(argv, argvlen, &argc, vector_binary, sdslen(vector_binary));     
+    // print the command for debugging
+    // if (config.search_debug) {
+        printf("DEBUG: Generated HSET command with %ld args:\n", argc);
+        for (int64_t i = 0; i < argc; i++) {
+            printf("  Arg %ld: %.*s\n", i, (int)argvlen[i], argv[i]);
+        }
+    // }
     int64_t len = valkeyFormatCommandArgv(cmd, argc, argv, argvlen);
-    
+    // print the final command string for debugging
+    // if (config.search_debug) {
+        printf("DEBUG: Final HSET command string (length %ld):\n", len);
+        fwrite(*cmd, 1, len, stdout);
+        printf("\n");
+    // }
     /* Cleanup allocated strings */
     sdsfree(key);
     sdsfree(vector_binary);
@@ -2091,8 +2288,22 @@ void initPlaceholders(const char *cmd, size_t cmd_len) {
             /* Move past the placeholder - vector placeholder has different length */
             p += placeholders.len[placeholder];
         }
+        // if (*count > 0) {
+        //     printf("Found %zu occurrences of placeholder '%s'\n", *count, PLACEHOLDERS[placeholder].name);
+        // }
     }
-
+    // print the command and the found placeholders for debugging
+    printf("DEBUG: Command template[len %d]:\n%.*s\n", (int)cmd_len, (int)cmd_len, cmd);
+    for (size_t placeholder = 0; placeholder < PLACEHOLDER_NUM_OF; placeholder++) {
+        size_t count = placeholders.count[placeholder];
+        if (count > 0) {
+            printf("DEBUG: Placeholder '%s' occurrences at indices: ", PLACEHOLDERS[placeholder].name);
+            for (size_t i = 0; i < count; i++) {
+                printf("%zu ", temp_indices[placeholder][i]);
+            }
+            printf("\n");
+        }
+    }
     /* consolidate temp data into contiguous allocation */
     placeholders.index_data = zcalloc(sizeof(size_t) * total_count);
     size_t overall_index = 0;
@@ -2287,23 +2498,46 @@ static void replacePlaceholderDataset(
                 /* Generate actual tag value */
                 sds selected_tag = selectTagByDistribution();
                 int64_t actual_tag_len = selected_tag ? sdslen(selected_tag) : 0;
-                
+                assert(actual_tag_len <= config.search.payload_tag_len);
+                assert(actual_tag_len > 0);
                 /* Calculate RESP header length - number of digits needed for payload_tag_len */
                 int64_t header_len = snprintf(NULL, 0, "%ld", config.search.payload_tag_len);
-                
+                // print the tag_payload_start - header_len - 3 , for debugging, print payload_tag_len*2 bytes
+                // printf("DEBUG BEFORE TAG DUMP:START<\n%.*s\nDEBUG TAG DUMP - END>\n", (int)config.search.payload_tag_len * 2, (char*)((uint64_t)tag_payload_start - header_len - 3 - 100));
                 /* Replace tag field and adjust RESP lengths with padding */
                 replaceTagFieldWithPadding(tag_payload_start, header_len, 
                                           config.search.payload_tag_len, 
                                           selected_tag, actual_tag_len);
-                
+                // printf("Replaced tag for vector_id %lu with tag '%s' (len %ld, padded to %ld)\n", 
+                //        vector_id, selected_tag, actual_tag_len, config.search.payload_tag_len);
+                // printf("DEBUG AFTER TAG DUMP:START<\n%.*s\nDEBUG TAG DUMP - END>\n", (int)config.search.payload_tag_len * 2, (char*)((uint64_t)tag_payload_start - header_len - 3 - 100));
+
                 if (selected_tag) sdsfree(selected_tag);
             }
             /* Debug output for first few inserts */
             static int64_t debug_count = 0;
             if (debug_count < 5) {
-                printf("DEBUG INSERT: dataset_idx=%lu, vector_id=%lu, key_str='%s', vec_size=%lu bytes\n",
-                    dataset_idx, vector_id, key, config.search.vector_dim * 4);
+                if (tag_count == 0) {
+                    printf("DEBUG INSERT: dataset_idx=%lu, vector_id=%lu, key_str='%s', vec_size=%lu bytes\n",
+                        dataset_idx, vector_id, key, config.search.vector_dim * 4);
+                } else {
+                    char *tag_payload_start = cmd + tag_indices[i];
+                    int64_t header_len = snprintf(NULL, 0, "%ld", config.search.payload_tag_len);
+                    char *tag_value_start = tag_payload_start + header_len + 2;
+                    int64_t tag_value_len = 0;
+                    while (tag_value_start[tag_value_len] != '\r' && tag_value_len < config.search.payload_tag_len) {
+                        tag_value_len++;
+                    }
+                    sds tag_value = sdsnewlen(tag_value_start, tag_value_len);
+                    printf("DEBUG INSERT: dataset_idx=%lu, vector_id=%lu, key_str='%s', tag_value='%s', vec_size=%lu bytes\n",
+                        dataset_idx, vector_id, key, tag_value, config.search.vector_dim * 4);
+                    sdsfree(tag_value);
+                    printf("DEBUG CMD DUMP:START<\n%.*s\nDEBUG CMD DUMP - END>\n", 1600, cmd);
+                }
                 debug_count++;
+            } else {
+                fflush(stdout);
+                // assert(0);
             }
         }
     }
@@ -2454,6 +2688,27 @@ static void replacePlaceholders(client c, char *cmd_data, int64_t cmd_count) {
             );
         }
 
+        /* Verify RESP protocol structure integrity (excluding binary payloads)
+         * Check that null bytes don't appear in RESP text sections.
+         * Binary payloads (like vector data) can legitimately contain null bytes. */
+        if (config.use_dataset && placeholders.count[DATASET_KEY_PLACEHOLDER_INDEX] > 0) {
+            size_t key_start = placeholders.indices[DATASET_KEY_PLACEHOLDER_INDEX][0];
+            /* Key starts after: prefix + cluster_tag + ':' */
+            size_t cluster_tag_len = config.cluster_mode ? PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len : 0;
+            size_t prefix_len = strlen(config.search.prefix);
+            size_t key_field_start = key_start - prefix_len - cluster_tag_len - 1;
+            size_t key_field_len = prefix_len + cluster_tag_len + 1 + PLACEHOLDERS[DATASET_KEY_PLACEHOLDER_INDEX].len;
+            
+            /* Check key field for null bytes (should not have any) */
+            int nulls_in_key = checkBufferForNulls(cmd + key_field_start, key_field_len, 
+                                                    "key field", 0);
+            if (nulls_in_key > 0) {
+                fprintf(stderr, "ERROR: Found %d null bytes in RESP key field (positions [%zu, %zu))\n", 
+                        nulls_in_key, key_field_start, key_field_start + key_field_len);
+                fprintf(stderr, "This indicates a bug in key encoding - RESP keys must not contain null bytes\n");
+                assert(0);
+            }
+        }
     }
 }
 
@@ -4640,7 +4895,7 @@ void setDefaultSearchConfig(void) {
     config.search.ef_search = 256; // Default EF Search
     config.search.m = 16; // Default HNSW M parameter
     config.search.tag_field = NULL; // No tag field by default
-    config.search.payload_tag_len = 1024; // Default max tag length
+    config.search.payload_tag_len = 16; // Default max tag length
     config.search.numeric_field = NULL; // No numeric field by default
     config.search.k = 10; // Default K for KNN queries
     config.search.curr_conf.tag_dists = NULL;
@@ -5899,7 +6154,7 @@ int main(int argc, char **argv) {
         } else if (config.cluster_mode == 0) {
             cluster_mode_str = "CMD (Cluster Mode Disabled)";
         }
-        
+        createSearchHsetTemplate(&cmd);
         printf("Using search indexes for the benchmark. %s - %s\n", 
                config.engine_type == ENGINE_TYPE_MEMORYDB ? "MemoryDB" : config.engine_type == ENGINE_TYPE_ELASTICACHE_VALKEY ? "EC Valkey" : "OSS",
                cluster_mode_str);
