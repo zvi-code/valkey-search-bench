@@ -70,6 +70,14 @@
 
 extern uint16_t crc16(const char *buf, int64_t len);
 
+/* Signal handling for graceful shutdown */
+static volatile sig_atomic_t interrupted = 0;
+
+static void sigintHandler(int sig) {
+    (void)sig;
+    interrupted = 1;
+}
+
 static long long nstime(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -5515,6 +5523,13 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     int64_t previous_requests_finished = atomic_load_explicit(&config.previous_requests_finished, memory_order_relaxed);
     long long current_tick = mstime();
 
+    /* Check for Ctrl+C interrupt - stop gracefully */
+    if (interrupted) {
+        fprintf(stderr, "\n\nInterrupted by user (Ctrl+C). Stopping benchmark gracefully...\n");
+        aeStop(eventLoop);
+        return AE_NOMORE;
+    }
+
     if (liveclients == 0 && requests_finished != config.requests) {
         fprintf(stderr, "All clients disconnected... aborting.\n");
         assert(0);
@@ -5634,6 +5649,7 @@ int main(int argc, char **argv) {
     init_genrand64(ustime() ^ getpid());
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
+    signal(SIGINT, sigintHandler);
 
     config.ct = VALKEY_CONN_TCP;
     config.numclients = 50;
