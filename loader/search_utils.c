@@ -1777,7 +1777,7 @@ clusterSnapshot* createClusterSnapshot(const char *command,
                 line = strtok_r(NULL, "\n", &saveptr);
             }
             
-            zfree(lines_copy);
+            // free(lines_copy);
             sdsfree(lines);
         }
         
@@ -2296,15 +2296,15 @@ clusterSnapshot* getSearchInfo(int cluster_node_count, clusterNode **cluster_nod
     assert(info_snapshot);    
     for (int i = 0; i < info_snapshot->num_fields; i++) {
         if (info_snapshot->fields[i].valid) {
-            if (sdscmp(info_snapshot->fields[i].field_name, "search_used_memory_bytes") == 0) {
+            if (strcmp(info_snapshot->fields[i].field_name, "search_used_memory_bytes") == 0) {
                 *search_memory = info_snapshot->fields[i].value;
-            } else if (sdscmp(info_snapshot->fields[i].field_name, "search_index_reclaimable_memory") == 0) {
+            } else if (strcmp(info_snapshot->fields[i].field_name, "search_index_reclaimable_memory") == 0) {
                 *search_reclaimable = info_snapshot->fields[i].value;
-            } else if (sdscmp(info_snapshot->fields[i].field_name, "search_total_indexed_documents") == 0) {
+            } else if (strcmp(info_snapshot->fields[i].field_name, "search_total_indexed_documents") == 0) {
                 *search_total_docs = info_snapshot->fields[i].value;
-            } else if (sdscmp(info_snapshot->fields[i].field_name, "search_ingest_field_vector") == 0) {
+            } else if (strcmp(info_snapshot->fields[i].field_name, "search_ingest_field_vector") == 0) {
                 *search_ingest_field_vector = info_snapshot->fields[i].value;
-            } else if (sdscmp(info_snapshot->fields[i].field_name, "search_background_indexing_status") == 0) {
+            } else if (strcmp(info_snapshot->fields[i].field_name, "search_background_indexing_status") == 0) {
                 *search_background_indexing_status = info_snapshot->fields[i].value;
             }
             // printf("> %s:%lld\n", info_snapshot->fields[i].field_name, info_snapshot->fields[i].value);

@@ -137,10 +137,10 @@ static const struct {
     [CLUSTER_PLACEHOLDER_INDEX] = {CLUSTER_PLACEHOLDER, 5},
     [VECTOR_PLACEHOLDER_INDEX] = {VECTOR_PLACEHOLDER, 8},  // Vector placeholder
     [DATASET_KEY_PLACEHOLDER_INDEX] = {DATASET_KEY_PLACEHOLDER, 12},
-    [DATASET_VECTOR_PLACEHOLDER_INDEX] = {DATASET_VECTOR_PLACEHOLDER, 16},
+    [DATASET_VECTOR_PLACEHOLDER_INDEX] = {DATASET_VECTOR_PLACEHOLDER, 14},  // "__d_vec_ph____" is 14 chars
     [DATASET_TAG_PLACEHOLDER_INDEX] = {DATASET_TAG_PLACEHOLDER, 16},
     [DATASET_NUMERIC_TIME_PLACEHOLDER_INDEX] = {DATASET_NUMERIC_TIME_PLACEHOLDER, 8},
-    [DATASET_NUMERIC_SCORE_PLACEHOLDER_INDEX] = {DATASET_NUMERIC_SCORE_PLACEHOLDER, 8},
+    [DATASET_NUMERIC_SCORE_PLACEHOLDER_INDEX] = {DATASET_NUMERIC_SCORE_PLACEHOLDER, 9},  // "__score__" is 9 chars
 };
 
 
@@ -446,6 +446,7 @@ static struct config {
     int64_t no_baseline;              /* Disable baseline measurement */
     int64_t baseline_measured;        /* Flag indicating baseline has been measured */
     int64_t skip_latency_report;      /* Skip printing latency report (used internally) */
+    int64_t preserve_histograms;      /* Don't free histograms in benchmarkSequence (used for baseline) */
 } config = {0};
 
 /* Recall statistics for dataset mode */
@@ -1318,10 +1319,28 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
     size_t expected_results = (size_t)config.search.k;
     if (total_results < expected_results) {
         if (config.search_debug) {
-            printf_results("WARNING: Expected k=%ld results but reply contains only %zu results\n",
+            printf_results("INFO: Expected k=%ld results but reply contains only %zu results\n",
                           config.search.k, total_results);
         }
         expected_results = total_results;
+    }
+    
+    /* Handle zero results case - this can happen with very restrictive filters */
+    if (expected_results == 0) {
+        if (config.use_filtered_search) {
+            printf_results("INFO: Filter returned zero results (k=%ld)\n", config.search.k);
+        } else {
+            fprintf(stderr, "WARNING: Zero results returned for k=%ld (no filter applied)\n", 
+                    config.search.k);
+        }
+        if (config.print_search_results) {
+            pthread_mutex_unlock(&recall_stats_mutex);
+        }
+        /* Free filtered neighbors if allocated */
+        if (config.use_filtered_search && query_neighbors) {
+            dataset_free_neighbors(query_neighbors);
+        }
+        return;
     }
     
     uint64_t result_vec_ids[expected_results];
@@ -1428,18 +1447,51 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
                 continue;
             }
             
-            if (num_vecs_ids < total_results) {
-                gt_vec_ids[num_vecs_ids] = query_neighbors->ids[num_vecs_ids];
-                result_vec_ids[num_vecs_ids++] = vector_id;
+            /* Ensure we don't exceed allocated array bounds */
+            if (num_vecs_ids >= expected_results) {
+                fprintf(stderr, "FATAL ERROR: Received more results (%zu) than expected (%zu). "
+                        "This indicates a mismatch between k=%ld and actual reply structure.\n",
+                        num_vecs_ids + 1, expected_results, config.search.k);
+                fprintf(stderr, "Reply structure:\n");
+                debugPrintReplyStructure(reply, 0, 3);
+                assert(0);
             }
+            
+            gt_vec_ids[num_vecs_ids] = query_neighbors->ids[num_vecs_ids];
+            result_vec_ids[num_vecs_ids++] = vector_id;
         }
     }
     
     /* Verify we got the expected number of results */
-    if (num_vecs_ids != (size_t)config.search.k && num_vecs_ids != total_results) {
-        fprintf(stderr, "WARNING: Expected k=%ld results, parsed %zu vectors, total_results=%zu\n", 
+    /* With filters, we may get fewer results than k */
+    if (num_vecs_ids > (size_t)config.search.k) {
+        fprintf(stderr, "FATAL ERROR: Received more results (%zu) than requested k=%ld\n", 
+                num_vecs_ids, config.search.k);
+        fprintf(stderr, "Reply structure:\n");
+        debugPrintReplyStructure(reply, 0, 3);
+        assert(0);
+    }
+    
+    if (num_vecs_ids != (size_t)config.search.k && !config.use_filtered_search) {
+        fprintf(stderr, "WARNING: Expected k=%ld results but got %zu (total_results=%zu). "
+                "This is unexpected without filters.\n",
                 config.search.k, num_vecs_ids, total_results);
     }
+    
+    if (config.use_filtered_search && num_vecs_ids < (size_t)config.search.k) {
+        if (config.search_debug) {
+            printf_results("INFO: Filter reduced results from k=%ld to %zu vectors\n",
+                          config.search.k, num_vecs_ids);
+        }
+    }
+    
+    /* Sanity check: ensure num_vecs_ids doesn't exceed allocated array size */
+    if (num_vecs_ids > expected_results) {
+        fprintf(stderr, "FATAL ERROR: Internal error - num_vecs_ids (%zu) exceeds expected_results (%zu)\n",
+                num_vecs_ids, expected_results);
+        assert(0);
+    }
+    
     qsort(result_vec_ids, num_vecs_ids, sizeof(uint64_t), uint64_cmp);
     qsort(gt_vec_ids, num_vecs_ids, sizeof(uint64_t), uint64_cmp);
     /* Compare with ground truth if available */
@@ -1461,7 +1513,8 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
         printf_results("\n=== ZZZ Ground Truth Comparison [perfect match %ld]===\n", num_perfect_matches);
         for (; i < num_vecs_ids; i++) {
             int64_t found = -1;
-            for (uint32_t j = num_perfect_matches; j < config.search.k; j++) {
+            /* Only search within the ground truth we actually have */
+            for (uint32_t j = num_perfect_matches; j < num_vecs_ids; j++) {
                 if (result_vec_ids[i] == gt_vec_ids[j]) {
                     matches++;
                     found = j;
@@ -3602,8 +3655,18 @@ static void benchmarkSequence(const char *title, char *cmd, int64_t len, int64_t
         config.paused_clients = listCreate();
     }
     if (config.threads) freeBenchmarkThreads();
-    if (config.current_sec_latency_histogram) hdr_close(config.current_sec_latency_histogram);
-    if (config.latency_histogram) hdr_close(config.latency_histogram);
+    
+    /* Only free histograms if we're not preserving them for later use */
+    if (!config.preserve_histograms) {
+        if (config.current_sec_latency_histogram) {
+            hdr_close(config.current_sec_latency_histogram);
+            config.current_sec_latency_histogram = NULL;
+        }
+        if (config.latency_histogram) {
+            hdr_close(config.latency_histogram);
+            config.latency_histogram = NULL;
+        }
+    }
     
     /* Cleanup node balancing resources */
     if (config.node_request_counters) {
@@ -3646,6 +3709,7 @@ static void measureBaselineLatency(void) {
     int64_t saved_quiet = config.quiet;
     int64_t saved_csv = config.csv;
     const char *saved_title = config.title;
+    int64_t saved_skip_latency_report = config.skip_latency_report;
     
     /* Set to single-threaded, single-client for pure network measurement */
     config.numclients = 1;
@@ -3654,11 +3718,12 @@ static void measureBaselineLatency(void) {
     config.quiet = 1;  /* Suppress all output during baseline measurement */
     config.csv = 0;    /* Don't output CSV for baseline */
     config.skip_latency_report = 1;  /* Don't show latency report for baseline */
+    config.preserve_histograms = 1;  /* Don't free histograms so we can read them */
     
     /* Run PING_INLINE benchmark (minimal overhead) - silently */
     benchmark("BASELINE_LATENCY", "PING\r\n", 6);
     
-    /* Collect baseline metrics from histogram */
+    /* Collect baseline metrics from histogram (preserved by benchmarkSequence) */
     if (config.latency_histogram && config.latency_histogram->total_count > 0) {
         baseline_latency.avg_latency_ms = hdr_mean(config.latency_histogram) / 1000.0;
         baseline_latency.min_latency_ms = ((double)hdr_min(config.latency_histogram)) / 1000.0;
@@ -3670,6 +3735,16 @@ static void measureBaselineLatency(void) {
         baseline_latency.measured = 1;
     }
     
+    /* Clean up the histogram created during baseline measurement */
+    if (config.latency_histogram) {
+        hdr_close(config.latency_histogram);
+        config.latency_histogram = NULL;
+    }
+    if (config.current_sec_latency_histogram) {
+        hdr_close(config.current_sec_latency_histogram);
+        config.current_sec_latency_histogram = NULL;
+    }
+    
     /* Restore original configuration */
     config.numclients = saved_clients;
     config.num_threads = saved_threads;
@@ -3677,7 +3752,8 @@ static void measureBaselineLatency(void) {
     config.quiet = saved_quiet;
     config.csv = saved_csv;
     config.title = saved_title;
-    config.skip_latency_report = 0;  /* Re-enable latency reports */
+    config.skip_latency_report = saved_skip_latency_report;
+    config.preserve_histograms = 0;  /* Reset to default behavior */
     
     /* Mark as measured in config */
     config.baseline_measured = 1;
