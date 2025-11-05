@@ -876,22 +876,23 @@ EngineType getEngineType(const char *ip_or_path, int port, enum valkeyConnection
     }
     // get the string value of line starts with os:
     char *os_line = strstr(reply->str, "os:");
+    EngineType result;
     if (os_line) {
         if (strstr(os_line, "Amazon MemoryDB") != NULL) {
-            freeReplyObject(reply);
-            return ENGINE_TYPE_MEMORYDB; /* It's a MemoryDB node */
+            result = ENGINE_TYPE_MEMORYDB; /* It's a MemoryDB node */
         } else if (strstr(os_line, "Amazon ElastiCache") != NULL) {
-            freeReplyObject(reply);
-            return ENGINE_TYPE_ELASTICACHE_VALKEY; /* It's a Redis node */
+            result = ENGINE_TYPE_ELASTICACHE_VALKEY; /* It's a Redis node */
         } else {
-            freeReplyObject(reply);
-            return ENGINE_TYPE_OSS_VALKEY; /* Unknown engine */
+            result = ENGINE_TYPE_OSS_VALKEY; /* Unknown engine */
         }
-    } 
-    printf("Error: 'os' field not found in INFO output on node %s.\n", ip_or_path);
+    } else {
+        printf("Error: 'os' field not found in INFO output on node %s.\n", ip_or_path);
+        result = ENGINE_TYPE_UNKNOWN; /* 'os' field not found */
+    }
+    
     freeReplyObject(reply);
     valkeyFree(ctx);
-    return ENGINE_TYPE_UNKNOWN; /* 'os' field not found */
+    return result;
 }
 
 /* Check if the server is running in Cluster Mode Enabled (CME) 
@@ -1774,14 +1775,12 @@ clusterSnapshot* createClusterSnapshot(const char *command,
                         }
                     }
                 }
-                line = strtok_r(NULL, "\n", &saveptr);
-            }
-            
-            // free(lines_copy);
-            sdsfree(lines);
+            line = strtok_r(NULL, "\n", &saveptr);
         }
         
-        freeReplyObject(reply);
+        sdsfree(lines_copy);
+        sdsfree(lines);
+    }        freeReplyObject(reply);
         valkeyFree(ctx);
     }
     

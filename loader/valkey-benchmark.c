@@ -1848,6 +1848,7 @@ static int64_t createSearchCmdTemplate(char **cmd) {
     
     int64_t len = valkeyFormatCommandArgv(cmd, argc, argv, argvlen);
     
+    sdsfree(filter);
     sdsfree(k_str);
     sdsfree(score_field);
     sdsfree(query);
@@ -3785,11 +3786,13 @@ static benchmarkThread *createBenchmarkThread(int64_t index) {
 
 
 static void freeBenchmarkThread(benchmarkThread *thread) {
-    if (thread->el) aeDeleteEventLoop(thread->el);
-    // list merge
+    // Free clients BEFORE freeing the event loop they reference
     freeClientsList(thread->clients);
     listRelease(thread->paused_clients);
     listRelease(thread->clients);
+    
+    // Now safe to free the event loop
+    if (thread->el) aeDeleteEventLoop(thread->el);
 
     zfree(thread->node_request_counters);
     zfree(thread->node_quota_remaining);
@@ -5573,19 +5576,43 @@ int main(int argc, char **argv) {
         if (saved_config.resp3) config.resp3 = saved_config.resp3;
 
         /* Apply search parameters */
-        if (saved_config.dataset) config.dataset_name = sdsnew(saved_config.dataset);
-        if (saved_config.search_name) config.search.name = sdsnew(saved_config.search_name);
-        if (saved_config.search_algorithm) config.search.algorithm = sdsnew(saved_config.search_algorithm);
-        if (saved_config.search_prefix) config.search.prefix = sdsnew(saved_config.search_prefix);
-        if (saved_config.vector_field) config.search.vector_field = sdsnew(saved_config.vector_field);
+        if (saved_config.dataset) {
+            if (config.dataset_name) sdsfree(config.dataset_name);
+            config.dataset_name = sdsnew(saved_config.dataset);
+        }
+        if (saved_config.search_name) {
+            if (config.search.name) sdsfree(config.search.name);
+            config.search.name = sdsnew(saved_config.search_name);
+        }
+        if (saved_config.search_algorithm) {
+            if (config.search.algorithm) sdsfree(config.search.algorithm);
+            config.search.algorithm = sdsnew(saved_config.search_algorithm);
+        }
+        if (saved_config.search_prefix) {
+            if (config.search.prefix) sdsfree(config.search.prefix);
+            config.search.prefix = sdsnew(saved_config.search_prefix);
+        }
+        if (saved_config.vector_field) {
+            if (config.search.vector_field) sdsfree(config.search.vector_field);
+            config.search.vector_field = sdsnew(saved_config.vector_field);
+        }
         if (saved_config.vector_dim > 0) config.search.vector_dim = saved_config.vector_dim;
-        if (saved_config.tag_field) config.search.tag_field = sdsnew(saved_config.tag_field);
-        if (saved_config.numeric_field) config.search.numeric_field = sdsnew(saved_config.numeric_field);
+        if (saved_config.tag_field) {
+            if (config.search.tag_field) sdsfree(config.search.tag_field);
+            config.search.tag_field = sdsnew(saved_config.tag_field);
+        }
+        if (saved_config.numeric_field) {
+            if (config.search.numeric_field) sdsfree(config.search.numeric_field);
+            config.search.numeric_field = sdsnew(saved_config.numeric_field);
+        }
         if (saved_config.ef_search > 0) config.search.ef_search = saved_config.ef_search;
         if (saved_config.ef_construction > 0) config.search.ef_construction = saved_config.ef_construction;
         if (saved_config.m > 0) config.search.m = saved_config.m;
         if (saved_config.k > 0) config.search.k = saved_config.k;
-        if (saved_config.metric) config.search.metric = sdsnew(saved_config.metric);
+        if (saved_config.metric) {
+            if (config.search.metric) sdsfree(config.search.metric);
+            config.search.metric = sdsnew(saved_config.metric);
+        }
         // if (saved_config.nocontent) config.search.nocontent = saved_config.nocontent;
         if (saved_config.localonly) config.search.localonly = saved_config.localonly;
         if (saved_config.use_filtered_search) config.use_filtered_search = saved_config.use_filtered_search;
@@ -6507,6 +6534,19 @@ int main(int argc, char **argv) {
     } while (config.loop);
 
     zfree(data);
+    
+    /* Cleanup cluster nodes BEFORE freeing connection info (nodes may reference hostip) */
+    if (config.cluster_nodes) {
+        freeClusterNodes();
+    }
+    
+    /* Cleanup selected nodes array (nodes themselves are freed above) */
+    if (config.selected_nodes) {
+        zfree(config.selected_nodes);
+        config.selected_nodes = NULL;
+    }
+    
+    /* Now safe to free connection info */
     freeCliConnInfo(config.conn_info);
     if (config.server_config != NULL) freeServerConfig(config.server_config);
     if (base_vector != NULL) zfree(base_vector);
@@ -6563,17 +6603,6 @@ int main(int argc, char **argv) {
         last_info_all = NULL;
     }
 
-    /* Cleanup cluster nodes */
-    if (config.cluster_nodes) {
-        freeClusterNodes();
-    }
-    
-    /* Cleanup selected nodes array (nodes themselves are freed above) */
-    if (config.selected_nodes) {
-        zfree(config.selected_nodes);
-        config.selected_nodes = NULL;
-    }
-
     /* Cleanup lists and event loop */
     if (config.clients) {
         listRelease(config.clients);
@@ -6587,6 +6616,18 @@ int main(int argc, char **argv) {
         aeDeleteEventLoop(config.el);
         config.el = NULL;
     }
+
+    /* Cleanup config strings (note: config.conn_info.hostip freed by freeCliConnInfo above) */
+    if (config.dataset_name) sdsfree(config.dataset_name);
+    if (config.search.name) sdsfree(config.search.name);
+    if (config.search.algorithm) sdsfree(config.search.algorithm);
+    if (config.search.prefix) sdsfree(config.search.prefix);
+    if (config.search.vector_field) sdsfree(config.search.vector_field);
+    if (config.search.tag_field) sdsfree(config.search.tag_field);
+    if (config.search.numeric_field) sdsfree(config.search.numeric_field);
+    if (config.search.metric) sdsfree(config.search.metric);
+    if (config.optimize_objective) sdsfree(config.optimize_objective);
+    if (config.optimize_csv_file) sdsfree(config.optimize_csv_file);
 
     /* Cleanup SSL config */
 #ifdef USE_OPENSSL
