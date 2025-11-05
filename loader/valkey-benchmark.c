@@ -3546,6 +3546,7 @@ static mstime_t snapshot_time = 0;
 /* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
  * seqlen is the number of commands included in cmd. */
 static void benchmarkSequence(const char *title, char *cmd, int64_t len, int64_t seqlen) {
+    if (interrupted) return;
     config.title = title;
     config.requests_issued = 0;
     config.requests_finished = 0;
@@ -5525,7 +5526,13 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
 
     /* Check for Ctrl+C interrupt - stop gracefully */
     if (interrupted) {
-        fprintf(stderr, "\n\nInterrupted by user (Ctrl+C). Stopping benchmark gracefully...\n");
+        static volatile sig_atomic_t message_printed = 0;
+        /* Print message only once across all threads */
+        if (!message_printed) {
+            message_printed = 1;
+            fprintf(stderr, "\n\nInterrupted by user (Ctrl+C). Stopping benchmark gracefully...\n");
+            fflush(stderr);
+        }
         aeStop(eventLoop);
         return AE_NOMORE;
     }
@@ -6301,7 +6308,7 @@ int main(int argc, char **argv) {
         config.keyspacelen = keyspacelen_before;
         // config.optimize_max_iterations = 10;
         /* Optimization loop */
-        while (opt_status != STATUS_CONVERGED && iteration < config.optimize_max_iterations) {
+        while (opt_status != STATUS_CONVERGED && iteration < config.optimize_max_iterations && !interrupted) {
             iteration++;
             
             /* Get current configuration from optimizer */
@@ -6701,7 +6708,7 @@ int main(int argc, char **argv) {
         }
 
         if (!config.csv) printf("\n");
-    } while (config.loop);
+    } while (config.loop && !interrupted);
 
     zfree(data);
     
