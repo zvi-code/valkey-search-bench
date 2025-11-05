@@ -1233,7 +1233,7 @@ static void debugPrintReplyStructure(valkeyReply *reply, int64_t depth, int64_t 
             fprintf(stderr, "\n");
             break;
     }
-    assert(0);
+    // assert(0);
 }
 
 /* Print FT.SEARCH results in a user-friendly format */
@@ -1271,7 +1271,7 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
             pthread_mutex_unlock(&recall_stats_mutex);
         }
         debugPrintReplyStructure(reply, 0, 3);
-        assert(0);
+        // assert(0);
         return;
     }
 
@@ -3091,6 +3091,17 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     return;
                 } else if (nwritten > 0) {
                     c->written += nwritten;
+                    /* Ensure WRITABLE event is registered to complete the write */
+                    if (config.ct != VALKEY_CONN_RDMA) {
+                        aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
+                    }
+                    return;
+                } else {
+                    /* nwritten == -1 && errno == EAGAIN: would block, try again later */
+                    /* Ensure WRITABLE event is registered for retry */
+                    if (config.ct != VALKEY_CONN_RDMA) {
+                        aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
+                    }
                     return;
                 }
             } else {
@@ -3585,6 +3596,11 @@ static void benchmarkSequence(const char *title, char *cmd, int64_t len, int64_t
         showLatencyReport();
     }
     freeAllClients();
+    /* Free the paused clients list (clients themselves are already freed) */
+    if (config.paused_clients) {
+        listRelease(config.paused_clients);
+        config.paused_clients = listCreate();
+    }
     if (config.threads) freeBenchmarkThreads();
     if (config.current_sec_latency_histogram) hdr_close(config.current_sec_latency_histogram);
     if (config.latency_histogram) hdr_close(config.latency_histogram);
@@ -6418,6 +6434,8 @@ int main(int argc, char **argv) {
     freeCliConnInfo(config.conn_info);
     if (config.server_config != NULL) freeServerConfig(config.server_config);
     if (base_vector != NULL) zfree(base_vector);
+    if (config.tests != NULL) sdsfree(config.tests);
+    if (config.input_dbnumstr != NULL) sdsfree(config.input_dbnumstr);
     resetPlaceholders();
     
     /* Restore runtime configuration if requested */
@@ -6444,10 +6462,68 @@ int main(int argc, char **argv) {
     /* Print dataset recall statistics if dataset mode was used */
     printDatasetRecallStats();
 
+    /* Cleanup dataset context */
+    if (config.dataset_ctx) {
+        dataset_destroy((dataset_ctx_t*)config.dataset_ctx);
+        config.dataset_ctx = NULL;
+    }
+
     /* Cleanup cluster tag mapping if it was initialized */
     if (config.use_dataset) {
         cleanupClusterTagMap(&cluster_tag_map);
     }
+
+    /* Cleanup snapshot info */
+    if (last_search_info) {
+        freeClusterSnapshot(last_search_info);
+        last_search_info = NULL;
+    }
+    if (last_ftinfo) {
+        freeClusterSnapshot(last_ftinfo);
+        last_ftinfo = NULL;
+    }
+    if (last_info_all) {
+        freeClusterSnapshot(last_info_all);
+        last_info_all = NULL;
+    }
+
+    /* Cleanup cluster nodes */
+    if (config.cluster_nodes) {
+        freeClusterNodes();
+    }
+    
+    /* Cleanup selected nodes array (nodes themselves are freed above) */
+    if (config.selected_nodes) {
+        zfree(config.selected_nodes);
+        config.selected_nodes = NULL;
+    }
+
+    /* Cleanup lists and event loop */
+    if (config.clients) {
+        listRelease(config.clients);
+        config.clients = NULL;
+    }
+    if (config.paused_clients) {
+        listRelease(config.paused_clients);
+        config.paused_clients = NULL;
+    }
+    if (config.el) {
+        aeDeleteEventLoop(config.el);
+        config.el = NULL;
+    }
+
+    /* Cleanup SSL config */
+#ifdef USE_OPENSSL
+    if (config.sslconfig.sni) free(config.sslconfig.sni);
+    if (config.sslconfig.cacert) free(config.sslconfig.cacert);
+    if (config.sslconfig.cacertdir) free(config.sslconfig.cacertdir);
+    if (config.sslconfig.cert) free(config.sslconfig.cert);
+    if (config.sslconfig.key) free(config.sslconfig.key);
+    if (config.sslconfig.ciphers) free(config.sslconfig.ciphers);
+#ifdef TLS1_3_VERSION
+    if (config.sslconfig.ciphersuites) free(config.sslconfig.ciphersuites);
+#endif
+#endif
 
     return 0;
 }
