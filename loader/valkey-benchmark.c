@@ -276,6 +276,9 @@ typedef void (*VectorPlaceholderCallback)(char *vector_data, const char *key, Ve
 static float *base_vector = NULL;
 static int64_t base_vector_dim = 0;
 
+/* Static variable to hold saved configuration for cleanup */
+static persisted_config_t *g_saved_config = NULL;
+
 /* Locations of the placeholders __rand_int__, __rand_1st__,
  * __rand_2nd, etc. within the RESP encoded command buffer. */
 static struct placeholders {
@@ -1102,7 +1105,6 @@ static int64_t vectorKeyProcessor(const char *key, void *user_data, int64_t thre
     uint64_t vector_id;
     int64_t prefix_len = strlen(config.search.prefix);
     char prefix[256];
-    cluster_tag[6] = '\0';
     if (decode_vector_key_fixed(key,
                                prefix, sizeof(prefix),
                                cluster_tag, sizeof(cluster_tag) ,
@@ -1271,7 +1273,7 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
             // lock mutex to prevent interleaved prints
             pthread_mutex_unlock(&recall_stats_mutex);
         }
-        debugPrintReplyStructure(reply, 0, 3);
+        // debugPrintReplyStructure(reply, 0, 3);
         // assert(0);
         return;
     }
@@ -1472,11 +1474,11 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
         assert(0);
     }
     
-    if (num_vecs_ids != (size_t)config.search.k && !config.use_filtered_search) {
-        fprintf(stderr, "WARNING: Expected k=%ld results but got %zu (total_results=%zu). "
-                "This is unexpected without filters.\n",
-                config.search.k, num_vecs_ids, total_results);
-    }
+    // if (num_vecs_ids != (size_t)config.search.k && !config.use_filtered_search) {
+    //     fprintf(stderr, "WARNING: Expected k=%ld results but got %zu (total_results=%zu). "
+    //             "This is unexpected without filters.\n",
+    //             config.search.k, num_vecs_ids, total_results);
+    // }
     
     if (config.use_filtered_search && num_vecs_ids < (size_t)config.search.k) {
         if (config.search_debug) {
@@ -1684,7 +1686,7 @@ static sds getSearchKeyTemplate(void) {
         ph_index = 0; 
     }
     key_len += PLACEHOLDERS[ph_index].len;
-    sds key = sdsnewlen("", key_len);
+    sds key = sdsnewlen(NULL, key_len);
     int64_t ret = 0;
     /* Dataset mode - placeholder for entire vector */
     if (config.cluster_mode) {
@@ -1746,7 +1748,6 @@ static int64_t createSearchHsetTemplate(char **cmd) {
         selected_tag = createTagTemplate();
         setArg(argv, argvlen, &argc, config.search.tag_field, strlen(config.search.tag_field));
         setArg(argv, argvlen, &argc, selected_tag, sdslen(selected_tag));
-        sdsfree(selected_tag);
     }
     
     /* Numeric field (optional) - can be extended to support multiple numeric fields
@@ -1761,9 +1762,11 @@ static int64_t createSearchHsetTemplate(char **cmd) {
     setArg(argv, argvlen, &argc, vector_binary, sdslen(vector_binary));     
 
     int64_t len = valkeyFormatCommandArgv(cmd, argc, argv, argvlen);
-    /* Cleanup allocated strings */
+    
+    /* Cleanup allocated strings - AFTER valkeyFormatCommandArgv uses them */
     sdsfree(key);
     sdsfree(vector_binary);
+    if (selected_tag) sdsfree(selected_tag);
     return len;
 }
 
@@ -2256,7 +2259,7 @@ static void replacePlaceholderDataset(
                 sds selected_tag = selectTagByDistribution();
                 int64_t actual_tag_len = selected_tag ? sdslen(selected_tag) : 0;
                 assert(actual_tag_len <= config.search.payload_tag_len);
-                assert(actual_tag_len > 0);
+                assert(actual_tag_len >= 0);
                 /* Calculate RESP header length - number of digits needed for payload_tag_len */
                 memcpy(tag_payload_start, selected_tag, actual_tag_len);
                 if (actual_tag_len < config.search.payload_tag_len) {
@@ -4714,6 +4717,10 @@ void setDefaultSearchConfig(void) {
     config.search.nocontent = 0; // exclude content by default
     config.search.localonly = 0; // Default LOCALONLY option
 }
+
+/* Forward declaration */
+static void cleanupConfig(void);
+
 /* Returns number of consumed options. */
 int parseOptions(int argc, char **argv) {
     int64_t i;
@@ -4734,6 +4741,7 @@ int parseOptions(int argc, char **argv) {
             sds version = cliVersion();
             printf("valkey-benchmark %s\n", version);
             sdsfree(version);
+            cleanupConfig();
             exit(0);
         } else if (!strcmp(argv[i], "-n")) {
             if (lastarg) goto invalid;
@@ -4790,6 +4798,7 @@ int parseOptions(int argc, char **argv) {
             int64_t test_latencies[] = {3000, 1000, 3000, 5000, 550, 100, 9000};
             int64_t num_test_nodes = sizeof(test_latencies) / sizeof(test_latencies[0]);
             testNodeBalancing(test_latencies, num_test_nodes, 10); /* 10 second test */
+            cleanupConfig();
             exit(0);
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
             parseUri(argv[++i], "valkey-benchmark", &config.conn_info, &config.tls);
@@ -5021,9 +5030,11 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--clear-config")) {
             if (config_persist_clear() == 0) {
                 printf("Configuration cleared successfully.\n");
+                cleanupConfig();
                 exit(0);
             } else {
                 fprintf(stderr, "Failed to clear configuration.\n");
+                cleanupConfig();
                 exit(1);
             }
         } else if (!strcmp(argv[i], "--show-config")) {
@@ -5035,6 +5046,7 @@ int parseOptions(int argc, char **argv) {
             } else {
                 printf("No saved configuration found.\n");
             }
+            cleanupConfig();
             exit(0);
         } else if (!strcmp(argv[i], "--help")) {
             exit_status = 0;
@@ -5358,7 +5370,140 @@ usage:
         "                         incr counter ';' exec\n\n",
         search_examples,
         " For more information, see the Valkey documentation at https://valkey.io.\n");
+    cleanupConfig();
     exit(exit_status);
+}
+
+/* Cleanup function to free all allocated resources */
+static void cleanupConfig(void) {
+    /* Cleanup saved config if it exists */
+    if (g_saved_config) {
+        config_persist_free(g_saved_config);
+        zfree(g_saved_config);
+        g_saved_config = NULL;
+    }
+
+    /* Cleanup cluster nodes */
+    if (config.cluster_nodes) freeClusterNodes();
+    if (config.selected_nodes) {
+        zfree(config.selected_nodes);
+        config.selected_nodes = NULL;
+    }
+
+    /* Cleanup connection info */
+    freeCliConnInfo(config.conn_info);
+
+    /* Cleanup dataset context */
+    if (config.dataset_ctx) {
+        dataset_destroy((dataset_ctx_t*)config.dataset_ctx);
+        config.dataset_ctx = NULL;
+    }
+
+    /* Cleanup cluster tag mapping if it was initialized */
+    if (config.use_dataset) {
+        cleanupClusterTagMap(&cluster_tag_map);
+    }
+
+    /* Cleanup snapshot info */
+    if (last_search_info) {
+        freeClusterSnapshot(last_search_info);
+        last_search_info = NULL;
+    }
+    if (last_ftinfo) {
+        freeClusterSnapshot(last_ftinfo);
+        last_ftinfo = NULL;
+    }
+    if (last_info_all) {
+        freeClusterSnapshot(last_info_all);
+        last_info_all = NULL;
+    }
+
+    /* Cleanup lists and event loop */
+    if (config.clients) {
+        listRelease(config.clients);
+        config.clients = NULL;
+    }
+    if (config.paused_clients) {
+        listRelease(config.paused_clients);
+        config.paused_clients = NULL;
+    }
+    if (config.el) {
+        aeDeleteEventLoop(config.el);
+        config.el = NULL;
+    }
+
+    /* Cleanup config strings */
+    if (config.dataset_name) sdsfree(config.dataset_name);
+    if (config.search.name) sdsfree(config.search.name);
+    if (config.search.algorithm) sdsfree(config.search.algorithm);
+    if (config.search.prefix) sdsfree(config.search.prefix);
+    if (config.search.vector_field) sdsfree(config.search.vector_field);
+    if (config.search.tag_field) sdsfree(config.search.tag_field);
+    if (config.search.numeric_field) sdsfree(config.search.numeric_field);
+    if (config.search.metric) sdsfree(config.search.metric);
+    if (config.optimize_objective) sdsfree(config.optimize_objective);
+    if (config.optimize_csv_file) sdsfree(config.optimize_csv_file);
+    if (config.tests) sdsfree(config.tests);
+    if (config.input_dbnumstr) sdsfree(config.input_dbnumstr);
+
+    /* Cleanup runtime configuration */
+    if (config.runtime_config_ctx) {
+        freeRuntimeConfig(config.runtime_config_ctx);
+        config.runtime_config_ctx = NULL;
+    }
+
+    /* Cleanup SSL config */
+#ifdef USE_OPENSSL
+    if (config.sslconfig.sni) free(config.sslconfig.sni);
+    if (config.sslconfig.cacert) free(config.sslconfig.cacert);
+    if (config.sslconfig.cacertdir) free(config.sslconfig.cacertdir);
+    if (config.sslconfig.cert) free(config.sslconfig.cert);
+    if (config.sslconfig.key) free(config.sslconfig.key);
+    if (config.sslconfig.ciphers) free(config.sslconfig.ciphers);
+#ifdef TLS1_3_VERSION
+    if (config.sslconfig.ciphersuites) free(config.sslconfig.ciphersuites);
+#endif
+#endif
+
+    /* Cleanup optimize constraints */
+    if (config.optimize_constraints) {
+        for (int i = 0; i < config.num_optimize_constraints; i++) {
+            if (config.optimize_constraints[i]) sdsfree(config.optimize_constraints[i]);
+        }
+        free(config.optimize_constraints);
+        config.optimize_constraints = NULL;
+    }
+
+    /* Cleanup tag distributions */
+    if (config.search.curr_conf.tag_dists) {
+        for (int64_t i = 0; i < config.search.curr_conf.n_dists; i++) {
+            if (config.search.curr_conf.tag_dists[i].pattern) {
+                sdsfree(config.search.curr_conf.tag_dists[i].pattern);
+            }
+        }
+        zfree(config.search.curr_conf.tag_dists);
+        config.search.curr_conf.tag_dists = NULL;
+    }
+    if (config.search.curr_conf.tag_filter) {
+        sdsfree(config.search.curr_conf.tag_filter);
+        config.search.curr_conf.tag_filter = NULL;
+    }
+
+    /* Cleanup server config */
+    if (config.server_config) {
+        freeServerConfig(config.server_config);
+        config.server_config = NULL;
+    }
+
+    /* Cleanup base vector */
+    if (base_vector) {
+        zfree(base_vector);
+        base_vector = NULL;
+        base_vector_dim = 0;
+    }
+
+    /* Cleanup placeholders */
+    resetPlaceholders();
 }
 
 long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData) {
@@ -5558,83 +5703,88 @@ int main(int argc, char **argv) {
     config.no_save_config = 0;
 
     /* Load saved configuration if exists */
-    persisted_config_t saved_config;
-    memset(&saved_config, 0, sizeof(saved_config));
-    if (config_persist_load(&saved_config) == 0) {
+    g_saved_config = zcalloc(sizeof(persisted_config_t));
+    if (config_persist_load(g_saved_config) == 0) {
         /* Apply saved configuration as defaults */
-        if (saved_config.num_clients > 0) config.numclients = saved_config.num_clients;
-        if (saved_config.num_threads > 0) config.num_threads = saved_config.num_threads;
-        if (saved_config.pipeline > 0) config.pipeline = saved_config.pipeline;
-        if (saved_config.requests > 0) config.requests = saved_config.requests;
-        if (saved_config.keyspacelen > 0) config.keyspacelen = saved_config.keyspacelen;
-        if (saved_config.dbnum > 0) config.conn_info.input_dbnum = saved_config.dbnum;
-        if (saved_config.csv) config.csv = saved_config.csv;
-        if (saved_config.loop) config.loop = saved_config.loop;
-        if (saved_config.idlemode) config.idlemode = saved_config.idlemode;
-        if (saved_config.keepalive > 0) config.keepalive = saved_config.keepalive;
-        if (saved_config.precision > 0) config.precision = saved_config.precision;
-        if (saved_config.resp3) config.resp3 = saved_config.resp3;
+        if (g_saved_config->num_clients > 0) config.numclients = g_saved_config->num_clients;
+        if (g_saved_config->num_threads > 0) config.num_threads = g_saved_config->num_threads;
+        if (g_saved_config->pipeline > 0) config.pipeline = g_saved_config->pipeline;
+        if (g_saved_config->requests > 0) config.requests = g_saved_config->requests;
+        if (g_saved_config->keyspacelen > 0) config.keyspacelen = g_saved_config->keyspacelen;
+        if (g_saved_config->dbnum > 0) config.conn_info.input_dbnum = g_saved_config->dbnum;
+        if (g_saved_config->csv) config.csv = g_saved_config->csv;
+        if (g_saved_config->loop) config.loop = g_saved_config->loop;
+        if (g_saved_config->idlemode) config.idlemode = g_saved_config->idlemode;
+        if (g_saved_config->keepalive > 0) config.keepalive = g_saved_config->keepalive;
+        if (g_saved_config->precision > 0) config.precision = g_saved_config->precision;
+        if (g_saved_config->resp3) config.resp3 = g_saved_config->resp3;
 
         /* Apply search parameters */
-        if (saved_config.dataset) {
+        if (g_saved_config->dataset) {
             if (config.dataset_name) sdsfree(config.dataset_name);
-            config.dataset_name = sdsnew(saved_config.dataset);
+            config.dataset_name = sdsnew(g_saved_config->dataset);
         }
-        if (saved_config.search_name) {
+        if (g_saved_config->search_name) {
             if (config.search.name) sdsfree(config.search.name);
-            config.search.name = sdsnew(saved_config.search_name);
+            config.search.name = sdsnew(g_saved_config->search_name);
         }
-        if (saved_config.search_algorithm) {
+        if (g_saved_config->search_algorithm) {
             if (config.search.algorithm) sdsfree(config.search.algorithm);
-            config.search.algorithm = sdsnew(saved_config.search_algorithm);
+            config.search.algorithm = sdsnew(g_saved_config->search_algorithm);
         }
-        if (saved_config.search_prefix) {
+        if (g_saved_config->search_prefix) {
             if (config.search.prefix) sdsfree(config.search.prefix);
-            config.search.prefix = sdsnew(saved_config.search_prefix);
+            config.search.prefix = sdsnew(g_saved_config->search_prefix);
         }
-        if (saved_config.vector_field) {
+        if (g_saved_config->vector_field) {
             if (config.search.vector_field) sdsfree(config.search.vector_field);
-            config.search.vector_field = sdsnew(saved_config.vector_field);
+            config.search.vector_field = sdsnew(g_saved_config->vector_field);
         }
-        if (saved_config.vector_dim > 0) config.search.vector_dim = saved_config.vector_dim;
-        if (saved_config.tag_field) {
+        if (g_saved_config->vector_dim > 0) config.search.vector_dim = g_saved_config->vector_dim;
+        if (g_saved_config->tag_field) {
             if (config.search.tag_field) sdsfree(config.search.tag_field);
-            config.search.tag_field = sdsnew(saved_config.tag_field);
+            config.search.tag_field = sdsnew(g_saved_config->tag_field);
         }
-        if (saved_config.numeric_field) {
+        if (g_saved_config->numeric_field) {
             if (config.search.numeric_field) sdsfree(config.search.numeric_field);
-            config.search.numeric_field = sdsnew(saved_config.numeric_field);
+            config.search.numeric_field = sdsnew(g_saved_config->numeric_field);
         }
-        if (saved_config.ef_search > 0) config.search.ef_search = saved_config.ef_search;
-        if (saved_config.ef_construction > 0) config.search.ef_construction = saved_config.ef_construction;
-        if (saved_config.m > 0) config.search.m = saved_config.m;
-        if (saved_config.k > 0) config.search.k = saved_config.k;
-        if (saved_config.metric) {
+        if (g_saved_config->ef_search > 0) config.search.ef_search = g_saved_config->ef_search;
+        if (g_saved_config->ef_construction > 0) config.search.ef_construction = g_saved_config->ef_construction;
+        if (g_saved_config->m > 0) config.search.m = g_saved_config->m;
+        if (g_saved_config->k > 0) config.search.k = g_saved_config->k;
+        if (g_saved_config->metric) {
             if (config.search.metric) sdsfree(config.search.metric);
-            config.search.metric = sdsnew(saved_config.metric);
+            config.search.metric = sdsnew(g_saved_config->metric);
         }
-        // if (saved_config.nocontent) config.search.nocontent = saved_config.nocontent;
-        if (saved_config.localonly) config.search.localonly = saved_config.localonly;
-        if (saved_config.use_filtered_search) config.use_filtered_search = saved_config.use_filtered_search;
+        // if (g_saved_config->nocontent) config.search.nocontent = g_saved_config->nocontent;
+        if (g_saved_config->localonly) config.search.localonly = g_saved_config->localonly;
+        if (g_saved_config->use_filtered_search) config.use_filtered_search = g_saved_config->use_filtered_search;
 
         /* Apply optimizer parameters */
-        if (saved_config.optimize_objective) config.optimize_objective = sdsnew(saved_config.optimize_objective);
-        if (saved_config.optimize_csv_file) config.optimize_csv_file = sdsnew(saved_config.optimize_csv_file);
-        if (saved_config.optimize_max_iterations > 0) config.optimize_max_iterations = saved_config.optimize_max_iterations;
-        if (saved_config.optimize_min_requests > 0) config.optimize_min_requests = saved_config.optimize_min_requests;
+        if (g_saved_config->optimize_objective) {
+            if (config.optimize_objective) sdsfree(config.optimize_objective);
+            config.optimize_objective = sdsnew(g_saved_config->optimize_objective);
+        }
+        if (g_saved_config->optimize_csv_file) {
+            if (config.optimize_csv_file) sdsfree(config.optimize_csv_file);
+            config.optimize_csv_file = sdsnew(g_saved_config->optimize_csv_file);
+        }
+        if (g_saved_config->optimize_max_iterations > 0) config.optimize_max_iterations = g_saved_config->optimize_max_iterations;
+        if (g_saved_config->optimize_min_requests > 0) config.optimize_min_requests = g_saved_config->optimize_min_requests;
 
         /* Apply auth parameters */
-        if (saved_config.auth) config.conn_info.auth = sdsnew(saved_config.auth);
-        if (saved_config.user) config.conn_info.user = sdsnew(saved_config.user);
+        if (g_saved_config->auth) config.conn_info.auth = sdsnew(g_saved_config->auth);
+        if (g_saved_config->user) config.conn_info.user = sdsnew(g_saved_config->user);
 
         /* Apply TLS parameters */
 #ifdef USE_OPENSSL
-        if (saved_config.tls_cert) config.sslconfig.cert = strdup(saved_config.tls_cert);
-        if (saved_config.tls_key) config.sslconfig.key = strdup(saved_config.tls_key);
-        if (saved_config.tls_cacert) config.sslconfig.cacert = strdup(saved_config.tls_cacert);
-        if (saved_config.tls_cacertdir) config.sslconfig.cacertdir = strdup(saved_config.tls_cacertdir);
-        if (saved_config.tls_skip_verify) config.sslconfig.skip_cert_verify = saved_config.tls_skip_verify;
-        if (saved_config.sni) config.sslconfig.sni = strdup(saved_config.sni);
+        if (g_saved_config->tls_cert) config.sslconfig.cert = strdup(g_saved_config->tls_cert);
+        if (g_saved_config->tls_key) config.sslconfig.key = strdup(g_saved_config->tls_key);
+        if (g_saved_config->tls_cacert) config.sslconfig.cacert = strdup(g_saved_config->tls_cacert);
+        if (g_saved_config->tls_cacertdir) config.sslconfig.cacertdir = strdup(g_saved_config->tls_cacertdir);
+        if (g_saved_config->tls_skip_verify) config.sslconfig.skip_cert_verify = g_saved_config->tls_skip_verify;
+        if (g_saved_config->sni) config.sslconfig.sni = strdup(g_saved_config->sni);
 #endif
     }
 
@@ -5703,7 +5853,11 @@ int main(int argc, char **argv) {
     }
 
     /* Clean up the saved config */
-    config_persist_free(&saved_config);
+    if (g_saved_config) {
+        config_persist_free(g_saved_config);
+        zfree(g_saved_config);
+        g_saved_config = NULL;
+    }
 
     tag = "";
 
@@ -6071,10 +6225,10 @@ int main(int argc, char **argv) {
         int64_t client_min, client_max, thread_min, thread_max;
         int64_t ef_search_min, ef_search_max, pipeline_min, pipeline_max;
         
-        parseOptimizeRange(config.optimize_client_range, &client_min, &client_max, 1, 1500);
+        parseOptimizeRange(config.optimize_client_range, &client_min, &client_max, 1, 800);
         parseOptimizeRange(config.optimize_thread_range, &thread_min, &thread_max, 0, 16);
         parseOptimizeRange(config.optimize_ef_search_range, &ef_search_min, &ef_search_max, 20, 500);
-        parseOptimizeRange(config.optimize_pipeline_range, &pipeline_min, &pipeline_max, 1, 1000);
+        parseOptimizeRange(config.optimize_pipeline_range, &pipeline_min, &pipeline_max, 1, 100);
         
         optimizer_add_param_grouped(config.optimizer, "clients", client_min, client_max, 5, config.numclients, PARAM_GROUP_THROUGHPUT);
         optimizer_add_param_grouped(config.optimizer, "threads", thread_min, thread_max, 1, config.num_threads, PARAM_GROUP_THROUGHPUT);
@@ -6535,25 +6689,6 @@ int main(int argc, char **argv) {
 
     zfree(data);
     
-    /* Cleanup cluster nodes BEFORE freeing connection info (nodes may reference hostip) */
-    if (config.cluster_nodes) {
-        freeClusterNodes();
-    }
-    
-    /* Cleanup selected nodes array (nodes themselves are freed above) */
-    if (config.selected_nodes) {
-        zfree(config.selected_nodes);
-        config.selected_nodes = NULL;
-    }
-    
-    /* Now safe to free connection info */
-    freeCliConnInfo(config.conn_info);
-    if (config.server_config != NULL) freeServerConfig(config.server_config);
-    if (base_vector != NULL) zfree(base_vector);
-    if (config.tests != NULL) sdsfree(config.tests);
-    if (config.input_dbnumstr != NULL) sdsfree(config.input_dbnumstr);
-    resetPlaceholders();
-    
     /* Restore runtime configuration if requested */
     if (config.restore_runtime_config && config.runtime_config_ctx) {
         if (!config.quiet) {
@@ -6569,78 +6704,11 @@ int main(int argc, char **argv) {
         }
     }
     
-    /* Free runtime configuration context */
-    if (config.runtime_config_ctx) {
-        freeRuntimeConfig(config.runtime_config_ctx);
-        config.runtime_config_ctx = NULL;
-    }
-    
     /* Print dataset recall statistics if dataset mode was used */
     printDatasetRecallStats();
 
-    /* Cleanup dataset context */
-    if (config.dataset_ctx) {
-        dataset_destroy((dataset_ctx_t*)config.dataset_ctx);
-        config.dataset_ctx = NULL;
-    }
-
-    /* Cleanup cluster tag mapping if it was initialized */
-    if (config.use_dataset) {
-        cleanupClusterTagMap(&cluster_tag_map);
-    }
-
-    /* Cleanup snapshot info */
-    if (last_search_info) {
-        freeClusterSnapshot(last_search_info);
-        last_search_info = NULL;
-    }
-    if (last_ftinfo) {
-        freeClusterSnapshot(last_ftinfo);
-        last_ftinfo = NULL;
-    }
-    if (last_info_all) {
-        freeClusterSnapshot(last_info_all);
-        last_info_all = NULL;
-    }
-
-    /* Cleanup lists and event loop */
-    if (config.clients) {
-        listRelease(config.clients);
-        config.clients = NULL;
-    }
-    if (config.paused_clients) {
-        listRelease(config.paused_clients);
-        config.paused_clients = NULL;
-    }
-    if (config.el) {
-        aeDeleteEventLoop(config.el);
-        config.el = NULL;
-    }
-
-    /* Cleanup config strings (note: config.conn_info.hostip freed by freeCliConnInfo above) */
-    if (config.dataset_name) sdsfree(config.dataset_name);
-    if (config.search.name) sdsfree(config.search.name);
-    if (config.search.algorithm) sdsfree(config.search.algorithm);
-    if (config.search.prefix) sdsfree(config.search.prefix);
-    if (config.search.vector_field) sdsfree(config.search.vector_field);
-    if (config.search.tag_field) sdsfree(config.search.tag_field);
-    if (config.search.numeric_field) sdsfree(config.search.numeric_field);
-    if (config.search.metric) sdsfree(config.search.metric);
-    if (config.optimize_objective) sdsfree(config.optimize_objective);
-    if (config.optimize_csv_file) sdsfree(config.optimize_csv_file);
-
-    /* Cleanup SSL config */
-#ifdef USE_OPENSSL
-    if (config.sslconfig.sni) free(config.sslconfig.sni);
-    if (config.sslconfig.cacert) free(config.sslconfig.cacert);
-    if (config.sslconfig.cacertdir) free(config.sslconfig.cacertdir);
-    if (config.sslconfig.cert) free(config.sslconfig.cert);
-    if (config.sslconfig.key) free(config.sslconfig.key);
-    if (config.sslconfig.ciphers) free(config.sslconfig.ciphers);
-#ifdef TLS1_3_VERSION
-    if (config.sslconfig.ciphersuites) free(config.sslconfig.ciphersuites);
-#endif
-#endif
+    /* Cleanup all resources */
+    cleanupConfig();
 
     return 0;
 }
