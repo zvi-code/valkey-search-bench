@@ -1,7 +1,6 @@
-# Valkey Vector Benchmark 
-[This is still a work in progress. Feedback and contributions are welcome!]
+# Valkey Vector Benchmark
 
-A standalone benchmarking toolkit for evaluating vector search (and other valkey workloads) performance in Valkey and Redis clusters, with support for standard vectordb-bench datasets and comprehensive recall validation.
+A standalone benchmarking toolkit for evaluating vector search performance in Valkey and Redis clusters, with support for standard vectordb-bench datasets and comprehensive recall validation.
 
 ## Overview
 

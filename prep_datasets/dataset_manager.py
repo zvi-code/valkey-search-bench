@@ -36,6 +36,10 @@ import urllib.request
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 
+# Determine Python command to use (prefer venv if available)
+VENV_PYTHON = Path(__file__).parent.parent / "venv" / "bin" / "python3"
+PYTHON_CMD = str(VENV_PYTHON) if VENV_PYTHON.exists() else sys.executable
+
 # Paths
 DATASETS_DIR = Path("/mnt/data/datasets")
 BUILD_DIR = Path("/mnt/data/build-datasets")
@@ -304,17 +308,25 @@ def get_dataset(dataset_name: str, force: bool = False):
     
     source = info["source"]
     
+    # Download and convert the dataset
+    success = False
     if source == "ann-benchmarks":
-        return get_ann_benchmarks_dataset(dataset_name, info, output_bin)
+        success = get_ann_benchmarks_dataset(dataset_name, info, output_bin)
     elif source == "vectordb-bench":
-        return get_vectordb_bench_dataset(dataset_name, info, output_bin)
+        success = get_vectordb_bench_dataset(dataset_name, info, output_bin)
     elif source == "bigann":
-        return get_bigann_dataset(dataset_name, info, output_bin)
+        success = get_bigann_dataset(dataset_name, info, output_bin)
     elif source == "bigann-metadata":
-        return get_bigann_metadata_dataset(dataset_name, info, output_bin)
+        success = get_bigann_metadata_dataset(dataset_name, info, output_bin)
     else:
         print(f"✗ Unsupported source: {source}")
         return False
+    
+    # Create symlink in local datasets directory if successful
+    if success:
+        create_dataset_symlink(dataset_name)
+    
+    return success
 
 
 def get_ann_benchmarks_dataset(name: str, info: Dict, output_bin: Path) -> bool:
@@ -333,7 +345,7 @@ def get_ann_benchmarks_dataset(name: str, info: Dict, output_bin: Path) -> bool:
     prepare_binary = UTILS_DIR / "prepare_binary.py"
     
     cmd = [
-        "python3", str(prepare_binary),
+        PYTHON_CMD, str(prepare_binary),
         str(hdf5_path),
         str(output_bin),
         "--metric", info["metric"],
@@ -359,7 +371,7 @@ def get_vectordb_bench_dataset(name: str, info: Dict, output_bin: Path) -> bool:
     
     print(f"\nDownloading VectorDBBench dataset...")
     cmd = [
-        "python3", str(download_script),
+        PYTHON_CMD, str(download_script),
         info["dataset_type"],
         str(info["size"])
     ]
@@ -376,7 +388,7 @@ def get_vectordb_bench_dataset(name: str, info: Dict, output_bin: Path) -> bool:
     
     print(f"\nConverting Parquet to HDF5...")
     cmd = [
-        "python3", str(convert_script),
+        PYTHON_CMD, str(convert_script),
         str(parquet_dir),
         str(hdf5_path),
         "--name", name
@@ -393,7 +405,7 @@ def get_vectordb_bench_dataset(name: str, info: Dict, output_bin: Path) -> bool:
     
     print(f"\nConverting to Valkey binary format...")
     cmd = [
-        "python3", str(prepare_binary),
+        PYTHON_CMD, str(prepare_binary),
         str(hdf5_path),
         str(output_bin),
         "--metric", info["metric"],
@@ -423,6 +435,32 @@ def get_bigann_metadata_dataset(name: str, info: Dict, output_bin: Path) -> bool
     print(f"  Dataset: {name}")
     print(f"  This requires special handling for metadata")
     return False
+
+
+def create_dataset_symlink(dataset_name: str):
+    """Create a symlink in the local datasets directory pointing to the build directory."""
+    # Local datasets directory for symlinks
+    local_datasets_dir = PROJECT_ROOT / "datasets"
+    local_datasets_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Source file in build directory
+    source_bin = BUILD_DIR / f"{dataset_name}.bin"
+    
+    # Symlink in local datasets directory
+    symlink_path = local_datasets_dir / f"{dataset_name}.bin"
+    
+    # Remove existing symlink if it exists
+    if symlink_path.exists() or symlink_path.is_symlink():
+        symlink_path.unlink()
+    
+    # Create symlink
+    try:
+        symlink_path.symlink_to(source_bin)
+        print(f"✓ Created symlink: {symlink_path} -> {source_bin}")
+        return True
+    except Exception as e:
+        print(f"⚠ Warning: Could not create symlink: {e}")
+        return False
 
 
 def verify_dataset(bin_path: Path) -> bool:
@@ -514,7 +552,7 @@ def main():
         # Call prepare_binary.py
         prepare_binary = UTILS_DIR / "prepare_binary.py"
         cmd = [
-            "python3", str(prepare_binary),
+            PYTHON_CMD, str(prepare_binary),
             args.input,
             args.output,
             "--metric", args.metric,

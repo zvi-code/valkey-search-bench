@@ -1245,6 +1245,86 @@ static sds convertMemDBFtInfoToLines(valkeyReply *reply, const char *prefix) {
     return lines;
 }
 
+/**
+ * Extract the key prefix from FT.INFO response
+ * 
+ * For ElastiCache: looks for "index_definition.prefixes" in the response
+ * For MemoryDB: looks for "key_prefixes" in the response
+ * 
+ * Returns: allocated sds with the first prefix, or NULL if not found
+ */
+sds extractPrefixFromFtInfo(valkeyReply *reply, EngineType engine_type) {
+    if (!reply || reply->type != VALKEY_REPLY_ARRAY) {
+        return NULL;
+    }
+    
+    if (engine_type == ENGINE_TYPE_MEMORYDB) {
+        /* MemoryDB format: key_prefixes is a direct key with array value */
+        for (size_t i = 0; i < reply->elements; i += 2) {
+            if (i + 1 >= reply->elements) break;
+            
+            valkeyReply *key_elem = reply->element[i];
+            valkeyReply *val_elem = reply->element[i + 1];
+            
+            if (!key_elem || !val_elem) continue;
+            
+            if ((key_elem->type == VALKEY_REPLY_STRING || key_elem->type == VALKEY_REPLY_STATUS) &&
+                strcmp(key_elem->str, "key_prefixes") == 0) {
+                
+                /* Value should be an array of prefixes */
+                if (val_elem->type == VALKEY_REPLY_ARRAY && val_elem->elements > 0) {
+                    valkeyReply *first_prefix = val_elem->element[0];
+                    if (first_prefix && (first_prefix->type == VALKEY_REPLY_STRING || 
+                                        first_prefix->type == VALKEY_REPLY_STATUS)) {
+                        return sdsnew(first_prefix->str);
+                    }
+                }
+            }
+        }
+    } else {
+        /* ElastiCache format: nested in index_definition */
+        for (size_t i = 0; i < reply->elements; i += 2) {
+            if (i + 1 >= reply->elements) break;
+            
+            valkeyReply *key_elem = reply->element[i];
+            valkeyReply *val_elem = reply->element[i + 1];
+            
+            if (!key_elem || !val_elem) continue;
+            
+            if ((key_elem->type == VALKEY_REPLY_STRING || key_elem->type == VALKEY_REPLY_STATUS) &&
+                strcmp(key_elem->str, "index_definition") == 0) {
+                
+                /* index_definition is an array of key-value pairs */
+                if (val_elem->type == VALKEY_REPLY_ARRAY) {
+                    for (size_t j = 0; j < val_elem->elements; j += 2) {
+                        if (j + 1 >= val_elem->elements) break;
+                        
+                        valkeyReply *def_key = val_elem->element[j];
+                        valkeyReply *def_val = val_elem->element[j + 1];
+                        
+                        if (!def_key || !def_val) continue;
+                        
+                        if ((def_key->type == VALKEY_REPLY_STRING || def_key->type == VALKEY_REPLY_STATUS) &&
+                            strcmp(def_key->str, "prefixes") == 0) {
+                            
+                            /* prefixes is an array */
+                            if (def_val->type == VALKEY_REPLY_ARRAY && def_val->elements > 0) {
+                                valkeyReply *first_prefix = def_val->element[0];
+                                if (first_prefix && (first_prefix->type == VALKEY_REPLY_STRING ||
+                                                    first_prefix->type == VALKEY_REPLY_STATUS)) {
+                                    return sdsnew(first_prefix->str);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return NULL;
+}
+
 int getNodeProgressEC(clusterNode *node, enum valkeyConnectionType ct, const char *index_name, long long int* node_docs, int* progress_percent) {
     *node_docs = 0;
     int in_progress = 0;

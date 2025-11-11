@@ -70,6 +70,18 @@
 
 extern uint16_t crc16(const char *buf, int64_t len);
 
+/* Signal handling for graceful shutdown */
+static volatile sig_atomic_t interrupted = 0;
+
+static void sigintHandler(int sig) {
+    (void)sig;
+    
+    interrupted = 1;
+    
+    /* Reset to default handler so second Ctrl+C will abort immediately */
+    signal(SIGINT, SIG_DFL);
+}
+
 static long long nstime(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -800,7 +812,7 @@ static int64_t decode_vector_key_fixed(const char *key,
     }
     size_t prefix_len = strlen(config.search.prefix);
     size_t cluster_tag_len = config.cluster_mode? PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len : 0;
-    size_t key_len = strlen(key);
+    // size_t key_len = strlen(key);
     const char *read_pos = key;
 
     /* Extract prefix if requested */
@@ -1026,6 +1038,7 @@ static float checkNeighbors(uint64_t query_ix,
 
 static void printDatasetRecallStats(void) {
     if (!config.use_dataset || dataset_recall_stats.total_queries == 0) {
+        assert(0);
         return;
     }
 
@@ -1928,8 +1941,43 @@ static void createDefaultSearchIndexes(void) {
                 printf("found index '%s' ", list_reply->element[j]->str);
                 if (strcmp(list_reply->element[j]->str, indexes_to_create[i]) == 0) {
                     index_exists = 1;
-                    getFullInfo(indexes_to_create[i], config.selected_node_count, config.cluster_nodes, config.ct);
-                    if (config.clean) {
+                    if (!config.clean) {
+                        /* Get FT.INFO to extract prefix */
+                        valkeyReply *info_reply = valkeyCommand(ctx, "FT.INFO %s", indexes_to_create[i]);
+                        if (info_reply && info_reply->type == VALKEY_REPLY_ARRAY) {
+                            sds extracted_prefix = extractPrefixFromFtInfo(info_reply, config.engine_type);
+                            if (extracted_prefix) {
+                                printf("\nExtracted prefix from existing index: '%s'\n", extracted_prefix);
+                                
+                                /* If user provided a prefix, verify it matches */
+                                if (config.search.prefix && sdslen(config.search.prefix) > 0) {
+                                    if (sdscmp(config.search.prefix, extracted_prefix) != 0) {
+                                        fprintf(stderr, "ERROR: User-provided prefix '%s' does not match index prefix '%s'\n",
+                                                config.search.prefix, extracted_prefix);
+                                        fprintf(stderr, "Please use --search-prefix %s or drop and recreate the index.\n",
+                                                extracted_prefix);
+                                        sdsfree(extracted_prefix);
+                                        if (info_reply) freeReplyObject(info_reply);
+                                        if (list_reply) freeReplyObject(list_reply);
+                                        if (ctx != config.conn_ctx) valkeyFree(ctx);
+                                        assert(0);
+                                    }
+                                    printf("User-provided prefix matches index prefix ✓\n");
+                                    sdsfree(extracted_prefix);
+                                } else {
+                                    /* No user prefix - use the extracted one */
+                                    printf("Using prefix from existing index: '%s'\n", extracted_prefix);
+                                    if (config.search.prefix) sdsfree(config.search.prefix);
+                                    config.search.prefix = extracted_prefix;
+                                }
+                            } else {
+                                fprintf(stderr, "WARNING: Could not extract prefix from FT.INFO response\n");
+                            }
+                        }
+                        if (info_reply) freeReplyObject(info_reply);      
+                        printf("Index '%s' already exists, skipping creation.\n", indexes_to_create[i]);              
+                        getFullInfo(indexes_to_create[i], config.selected_node_count, config.cluster_nodes, config.ct);
+                    } else {
                         printf("Dropping existing index '%s' as --clean is specified\n", indexes_to_create[i]);
                         valkeyReply *drop_reply = valkeyCommand(ctx, "FT.DROPINDEX %s", indexes_to_create[i]);
                         if (drop_reply && (drop_reply->type == VALKEY_REPLY_STRING || drop_reply->type == VALKEY_REPLY_STATUS)) {
@@ -1941,9 +1989,7 @@ static void createDefaultSearchIndexes(void) {
                             assert(0);
                         }
                         if (drop_reply) freeReplyObject(drop_reply);
-                    } else {
-                        printf("Index '%s' already exists, skipping creation.\n", indexes_to_create[i]);
-                    }
+                    } 
                 }            
             }
             printf("\n");
@@ -3290,7 +3336,7 @@ static client createClient(char *cmd, int64_t len, int64_t seqlen, client from, 
         c->prefix_pending++;
     }
 
-    if (config.read_from_replica == FROM_REPLICA_ONLY || config.read_from_replica == FROM_ALL) {
+    if ((!c->cluster_node || c->cluster_node->is_replica) && (config.read_from_replica == FROM_REPLICA_ONLY || config.read_from_replica == FROM_ALL)) {
         char *buf = NULL;
         int64_t len;
         len = valkeyFormatCommand(&buf, "READONLY");
@@ -3538,6 +3584,7 @@ static mstime_t snapshot_time = 0;
 /* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
  * seqlen is the number of commands included in cmd. */
 static void benchmarkSequence(const char *title, char *cmd, int64_t len, int64_t seqlen) {
+    if (interrupted) return;
     config.title = title;
     config.requests_issued = 0;
     config.requests_finished = 0;
@@ -4699,7 +4746,7 @@ static sds selectTagByDistribution(void) {
 
 void setDefaultSearchConfig(void) {
     config.search.name = sdsnew("test_vector_index");
-    config.search.prefix = sdsnew("vec:");
+    config.search.prefix = NULL;//sdsnew("vec:");
     config.search.vector_field = sdsnew("vector_field");
     config.search.vector_dim = 128; // Default vector dimension
     config.search.ef_construction = 256; // Default EF Construction
@@ -5515,6 +5562,19 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     int64_t previous_requests_finished = atomic_load_explicit(&config.previous_requests_finished, memory_order_relaxed);
     long long current_tick = mstime();
 
+    /* Check for Ctrl+C interrupt - stop gracefully */
+    if (interrupted) {
+        static volatile sig_atomic_t message_printed = 0;
+        /* Print message only once across all threads */
+        if (!message_printed) {
+            message_printed = 1;
+            fprintf(stderr, "\n\nInterrupted by user (Ctrl+C). Stopping benchmark gracefully...\n");
+            fflush(stderr);
+        }
+        aeStop(eventLoop);
+        return AE_NOMORE;
+    }
+
     if (liveclients == 0 && requests_finished != config.requests) {
         fprintf(stderr, "All clients disconnected... aborting.\n");
         assert(0);
@@ -5634,6 +5694,7 @@ int main(int argc, char **argv) {
     init_genrand64(ustime() ^ getpid());
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
+    signal(SIGINT, sigintHandler);
 
     config.ct = VALKEY_CONN_TCP;
     config.numclients = 50;
@@ -5875,6 +5936,8 @@ int main(int argc, char **argv) {
         assert(0);
     }
     config.engine_type = getEngineType(config.conn_info.hostip, config.conn_info.hostport, config.ct);
+    if (config.engine_type == ENGINE_TYPE_MEMORYDB)
+        config.search.localonly = 0;
     valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
     /* Detect cluster mode (CME vs CMD) */
     config.cluster_mode = isClusterModeEnabled(ctx) > 0; /* Unknown by default */
@@ -6076,8 +6139,7 @@ int main(int argc, char **argv) {
             if (!config.dataset_ctx) {
                 fprintf(stderr, "Failed to initialize dataset: %s\n", config.dataset_name);
                 exit(1);
-            }
-
+            }            
             /* Store metadata */
             config.dataset_num_vectors = info.num_vectors;
             config.dataset_num_queries = info.num_queries;
@@ -6099,14 +6161,11 @@ int main(int argc, char **argv) {
             /* Store distance metric */
             config.search.metric = sdsnewlen(info.distance_metric, strlen(info.distance_metric));
 
-
-
             /* Initialize recall tracking */
             initRecallStats();
 
             /* Initialize cluster tag mapping */
             initClusterTagMap(&cluster_tag_map, info.num_vectors * 2); /* initial capacity */
-
 
             /* Override vector dimension from dataset */
             if (config.search.vector_dim != (int64_t)info.dim) {
@@ -6122,7 +6181,6 @@ int main(int argc, char **argv) {
             printf("✓ Dataset loaded: %lu vectors, %lu queries, %u dims, %u neighbors\n",
                 info.num_vectors, info.num_queries, info.dim, info.num_neighbors);
         }
-
 
         if (config.cluster_mode && config.cluster_primary_nodes && config.cluster_primary_node_count > 0) {
             valkeyContext *ctx = config.cluster_primary_nodes[0]->ctx;
@@ -6174,8 +6232,7 @@ int main(int argc, char **argv) {
                 printf("Initial mapping built. New insertions will update mapping in real-time.\n");
             }        
         }
-    }
-    
+    }    
     /* Apply runtime configuration if specified */
     if (config.runtime_config_file) {
         config.runtime_config_ctx = loadRuntimeConfig(config.runtime_config_file);
@@ -6285,7 +6342,7 @@ int main(int argc, char **argv) {
         config.keyspacelen = keyspacelen_before;
         // config.optimize_max_iterations = 10;
         /* Optimization loop */
-        while (opt_status != STATUS_CONVERGED && iteration < config.optimize_max_iterations) {
+        while (opt_status != STATUS_CONVERGED && iteration < config.optimize_max_iterations && !interrupted) {
             iteration++;
             
             /* Get current configuration from optimizer */
@@ -6304,8 +6361,7 @@ int main(int argc, char **argv) {
             printf("\n--- Iteration %ld ---\n", iteration);
             printf("Config: clients=%ld threads=%ld pipeline=%ld ef_search=%ld requests=%ld\n",
                    config.numclients, config.num_threads, config.pipeline, config.search.ef_search, config.requests);
-            
-            
+                        
             benchmark("VEC-QUERY (optimizing)", cmd_opt, len_opt);
             
             /* Collect metrics */
@@ -6363,8 +6419,7 @@ int main(int argc, char **argv) {
                 config.num_threads = best->param_values[1];
                 // config.pipeline = best->param_values[2];
                 config.search.ef_search = best->param_values[2];
-                
-                
+                                
                 /* Run final benchmark with full request count */
                 if (config.use_search && test_is_selected("vec-query")) {
                     size_t keyspacelen_before = config.keyspacelen;
@@ -6376,8 +6431,7 @@ int main(int argc, char **argv) {
                     benchmark("VEC-QUERY (final)", cmd_final, len_final);
                     zfree(cmd_final);
                     config.keyspacelen = keyspacelen_before;
-                }
-                
+                }                
                 /* Print final benchmark results */
                 double final_metrics[METRIC_COUNT];
                 collectOptimizerMetrics(final_metrics);
@@ -6390,8 +6444,7 @@ int main(int argc, char **argv) {
         }
         
         if (csv_file) fclose(csv_file);
-        optimizer_destroy(config.optimizer);
-        
+        optimizer_destroy(config.optimizer);        
         /* Exit after optimization - don't run normal benchmarks */
         return 0;
     }
@@ -6486,9 +6539,6 @@ int main(int argc, char **argv) {
                 benchmark("VEC-LOAD", cmd, len);
                 zfree(cmd);
                 /* wait for index ingestion to complete*/
-                // sds flat_index = sdsnew(config.search.name);
-                // flat_index = sdscat(flat_index, "_flat");               
-                // const char* index_names[2] = {config.search.name, flat_index};
                 sleep(2); /* wait a bit before checking index status */
                 waitForIndexBackfillComplete(config.engine_type, config.selected_node_count, config.selected_nodes, config.ct, (const char**)&config.search.name, 1);
                 /* Index ingestion is done */
@@ -6685,7 +6735,7 @@ int main(int argc, char **argv) {
         }
 
         if (!config.csv) printf("\n");
-    } while (config.loop);
+    } while (config.loop && !interrupted);
 
     zfree(data);
     
