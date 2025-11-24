@@ -70,6 +70,18 @@
 
 extern uint16_t crc16(const char *buf, int64_t len);
 
+/* Signal handling for graceful shutdown */
+static volatile sig_atomic_t interrupted = 0;
+
+static void sigintHandler(int sig) {
+    (void)sig;
+    
+    interrupted = 1;
+    
+    /* Reset to default handler so second Ctrl+C will abort immediately */
+    signal(SIGINT, SIG_DFL);
+}
+
 static long long nstime(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -110,7 +122,7 @@ static long long nstime(void) {
 #define VECTOR_NUM_RAND_DIM (8/sizeof(float)) // Number of random dimensions for vector generation
 #define VECTOR_PLACEHOLDER_INDEX (CLUSTER_PLACEHOLDER_INDEX + 1)
 
-#define CLUSTER_PLACEHOLDER "{tag}"
+#define CLUSTER_PLACEHOLDER "{clt}"
 #define CLUSTER_PLACEHOLDER_INDEX PLACEHOLDER_NORMAL_NUM_OF
 
 
@@ -137,10 +149,10 @@ static const struct {
     [CLUSTER_PLACEHOLDER_INDEX] = {CLUSTER_PLACEHOLDER, 5},
     [VECTOR_PLACEHOLDER_INDEX] = {VECTOR_PLACEHOLDER, 8},  // Vector placeholder
     [DATASET_KEY_PLACEHOLDER_INDEX] = {DATASET_KEY_PLACEHOLDER, 12},
-    [DATASET_VECTOR_PLACEHOLDER_INDEX] = {DATASET_VECTOR_PLACEHOLDER, 16},
+    [DATASET_VECTOR_PLACEHOLDER_INDEX] = {DATASET_VECTOR_PLACEHOLDER, 14},  // "__d_vec_ph____" is 14 chars
     [DATASET_TAG_PLACEHOLDER_INDEX] = {DATASET_TAG_PLACEHOLDER, 16},
     [DATASET_NUMERIC_TIME_PLACEHOLDER_INDEX] = {DATASET_NUMERIC_TIME_PLACEHOLDER, 8},
-    [DATASET_NUMERIC_SCORE_PLACEHOLDER_INDEX] = {DATASET_NUMERIC_SCORE_PLACEHOLDER, 8},
+    [DATASET_NUMERIC_SCORE_PLACEHOLDER_INDEX] = {DATASET_NUMERIC_SCORE_PLACEHOLDER, 9},  // "__score__" is 9 chars
 };
 
 
@@ -276,6 +288,9 @@ typedef void (*VectorPlaceholderCallback)(char *vector_data, const char *key, Ve
 static float *base_vector = NULL;
 static int64_t base_vector_dim = 0;
 
+/* Static variable to hold saved configuration for cleanup */
+static persisted_config_t *g_saved_config = NULL;
+
 /* Locations of the placeholders __rand_int__, __rand_1st__,
  * __rand_2nd, etc. within the RESP encoded command buffer. */
 static struct placeholders {
@@ -320,6 +335,9 @@ typedef struct benchmarkThread {
     pthread_t thread;
     aeEventLoop *el;
     list *paused_clients;
+    int64_t *node_request_counters;  /* Array of request counts per node (current cycle) */
+    int64_t *node_quota_remaining;   /* Array of remaining quota per node */
+    list *clients;
 } benchmarkThread;
 
 
@@ -394,10 +412,10 @@ static struct config {
     uint64_t time_per_token;
     uint64_t time_per_burst;
     int64_t balance_nodes;           /* Enable fair node balancing mode */
-    uint64_t balance_cycle_ms;       /* Cycle duration in milliseconds (default: 1000ms) */
-    atomic_uint_fast64_t balance_cycle_start_ns; /* Current cycle start time (nanoseconds) */
-    atomic_uint_fast64_t *node_request_counters;  /* Array of request counts per node */
-    int64_t requests_per_node_per_cycle;         /* Quota: numclients/selected_node_count */
+    int64_t balance_quota_step;      /* Quota of requests per node per cycle (default: 1000) */
+    int64_t balance_tolerance_pct;   /* Tolerance percentage for imbalance (default: 10) */
+    int64_t *node_request_counters;  /* Array of request counts per node (current cycle) */
+    int64_t *node_quota_remaining;   /* Array of remaining quota per node */
     int64_t clean;
     int64_t use_search; /* Use search indexes */
     searchIndex search;
@@ -443,6 +461,7 @@ static struct config {
     int64_t no_baseline;              /* Disable baseline measurement */
     int64_t baseline_measured;        /* Flag indicating baseline has been measured */
     int64_t skip_latency_report;      /* Skip printing latency report (used internally) */
+    int64_t preserve_histograms;      /* Don't free histograms in benchmarkSequence (used for baseline) */
 } config = {0};
 
 /* Recall statistics for dataset mode */
@@ -695,7 +714,8 @@ static void collectOptimizerMetrics(double metrics[METRIC_COUNT]) {
 
 /* Prototypes */
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask);
-static void createMissingClients(client c);
+// static long long awakenNodeBalancedClient(struct aeEventLoop *eventLoop, long long id, void *clientData);
+static void createMissingClients(char *cmd, int64_t len, int64_t seqlen);
 static benchmarkThread *createBenchmarkThread(int64_t index);
 static void freeBenchmarkThread(benchmarkThread *thread);
 static void freeBenchmarkThreads(void);
@@ -763,13 +783,14 @@ static int64_t encode_vector_key_fixed(char *key_out, size_t key_out_size,
     key_write_len--;
     // Vector ID placeholder length check
     assert(12 == PLACEHOLDERS[DATASET_KEY_PLACEHOLDER_INDEX].len);
-    // Encode vector ID with fixed width
-    ret = snprintf(key_out, key_out_size+1, "%012lu",
-                        (unsigned long)vector_id);
+    // Encode vector ID with fixed width - format directly to avoid null terminator
+    char temp_buf[13];  // 12 digits + null terminator
+    ret = snprintf(temp_buf, sizeof(temp_buf), "%012lu", (unsigned long)vector_id);
+    assert(ret == 12);  // Should be exactly 12 characters
+    memcpy(key_out, temp_buf, 12);  // Copy without null terminator
     // printf("DEBUG: format='%s', encoded result='%.*s', ret=%ld\n",
     //        format, (int64_t)vector_id_len, p, ret);
-    assert(ret == key_write_len); // Should fit exactly
-    assert(key_out[key_write_len] == '\0');
+    assert(ret == (int64_t)key_write_len); // Should fit exactly
     return (ret >= 0 && ret <= (int64_t)key_write_len) ? 0 : -1;
 }
 
@@ -791,7 +812,7 @@ static int64_t decode_vector_key_fixed(const char *key,
     }
     size_t prefix_len = strlen(config.search.prefix);
     size_t cluster_tag_len = config.cluster_mode? PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len : 0;
-    size_t key_len = strlen(key);
+    // size_t key_len = strlen(key);
     const char *read_pos = key;
 
     /* Extract prefix if requested */
@@ -828,123 +849,71 @@ static int64_t decode_vector_key_fixed(const char *key,
 }
 
 /**
- * Replace tag field with new tag value and adjust RESP lengths using dummy padding field.
+ * Grow an sds string to a specified length, filling new space with a non-zero character.
  * 
- * This function implements the "dummy field as byte sink" strategy for tag fields,
- * handling tag generation, data copy, and RESP protocol adjustments in one place.
+ * Similar to sdsgrowzero, but fills with a specified character instead of null bytes.
+ * This is useful for creating padding that won't be misinterpreted as string terminators.
  * 
- * Strategy: When setting a tag smaller than the template size (e.g., "red" in 1024-byte slot),
- * we dynamically CREATE a __padding__ field in the remaining space to absorb unused bytes:
- * 
- * Template (before):
- *   <HSET key tag_field>$1024\r\n[1024 bytes]\r\n
- * 
- * After adjustment (3-byte tag "red"):
- *   - Padding total length = 1024 - 3 = 1021
- *   - Padding payload = 1021 - 2(\r\n) - len("__padding__"=11) - 4(length encoding) - 1(space) = 1003
- *   Result: <HSET key tag_field>$0003\r\nred\r\n __padding__ $1003\r\n[1003 gap]\r\n
- * 
- * This keeps total buffer size fixed while allowing the server to properly parse the command.
- * The dummy field value is never used - it just consumes the gap bytes.
- * 
- * @param payload_start Pointer to the start of the tag payload data (after \r\n following the length)
- * @param header_len Length of the length field (number of digits after '$') - always 4 for padding
- * @param payload_template_len Original/template payload length (total allocated space for tag)
- * @param tag_data The tag string to copy (can be NULL for empty tag)
- * @param tag_len Length of the tag data (0 for empty tag)
- * 
- * Requirements:
- * - header_len must be large enough to represent tag_len with leading zeros
- * - The buffer must have space for: $ + header_len + \r\n + payload_template_len + \r\n
- * - tag_len must be <= payload_template_len
- * - Function creates __padding__ field dynamically in remaining space
+ * @param s The sds string to grow (will be reallocated if needed)
+ * @param len The target length
+ * @param fill_char The character to fill new space with (e.g., ' ' for space)
+ * @return The grown sds string (may be different pointer than input)
  */
-static void replaceTagFieldWithPadding(char* payload_start, int64_t header_len, 
-                                       int64_t payload_template_len, 
-                                       const char* tag_data, int64_t tag_len) {
-    assert(tag_len <= payload_template_len);
-    assert(payload_start != NULL);
-    assert(header_len > 0);
+static sds sdsgrownonzero(sds s, size_t len, char fill_char) {
+    size_t curlen = sdslen(s);
     
-    /* Verify tag_len can be represented with header_len digits */
-    int64_t tag_len_digits = tag_len > 0 ? snprintf(NULL, 0, "%ld", tag_len) : 1;
-    assert(tag_len_digits <= header_len);
-    
-    /* Copy tag data to payload area */
-    if (tag_len > 0 && tag_data != NULL) {
-        memcpy(payload_start, tag_data, tag_len);
+    if (len <= curlen) {
+        return s;  /* Already at or past target length */
     }
     
-    /* Calculate RESP header start by counting backwards from payload start
-     * Layout: $<header_len digits>\r\n<payload>
-     * So we go back: header_len + 3 bytes (for $ + \r\n) */
-    char *resp_start = payload_start - (header_len + 3);
+    /* Grow to target length (initially filled with zeros) */
+    s = sdsgrowzero(s, len);
     
-    /* Verify we're at the RESP bulk string marker */
-    assert(*resp_start == '$');
+    /* Replace zeros with fill character in the newly allocated space */
+    memset(s + curlen, fill_char, len - curlen);
     
-    /* Verify the \r\n after the header is in place (should be just before payload_start) */
-    assert(resp_start[1 + header_len] == '\r');
-    assert(resp_start[1 + header_len + 1] == '\n');
-    
-    /* Calculate how many bytes we're no longer using */
-    int64_t unused_bytes = payload_template_len - tag_len;
-    
-    /* Update the tag field length with leading zeros to maintain fixed width */
-    char length_str[32];
-    int64_t written = snprintf(length_str, sizeof(length_str), "%0*ld", (int)header_len, tag_len);
-    assert(written == header_len); /* Ensure we didn't overflow the header length */
-    
-    /* Write the new length after the '$' */
-    memcpy(resp_start + 1, length_str, header_len);
-    
-    /* Place \r\n immediately after the tag data */
-    char *tag_terminator_pos = payload_start + tag_len;
-    tag_terminator_pos[0] = '\r';
-    tag_terminator_pos[1] = '\n';
-    
-    /* 
-     * CREATE the __padding__ field dynamically in the remaining space.
-     * 
-     * Layout after tag field:
-     *   \r\n __padding__ $XXXX\r\n[gap bytes]\r\n
-     * 
-     * Calculation (using 4-byte length encoding for padding):
-     *   - unused_bytes = payload_template_len - tag_len (includes space for \r\n after tag)
-     *   - Subtract: 2 (\r\n) + 1 (space) + 11 ("__padding__") + 1 ($) + 4 (length) + 2 (\r\n)
-     *   - Padding payload = unused_bytes - 21
-     * 
-     * Example: tag="red" (3 bytes), template=1024
-     *   - unused = 1024 - 3 = 1021
-     *   - padding_payload = 1021 - 2 - 1 - 11 - 1 - 4 - 2 = 1000
-     * 
-     * Wait, recalculating per user's example:
-     *   - padding total = 1024 - 3 = 1021
-     *   - padding payload = 1021 - 2(\r\n) - 11(__padding__) - 4(len) - 1(space) = 1003
-     *   - So overhead = 1021 - 1003 = 18 (the final \r\n is part of gap bytes)
-     */
-    const int64_t PADDING_OVERHEAD = 18; /* space + "__padding__" + $ + 4-digit-len + \r\n before payload */
-    
-    if (unused_bytes > PADDING_OVERHEAD) {
-        char *padding_start = tag_terminator_pos + 2; /* After \r\n */
-        
-        /* Write: " __padding__ $XXXX\r\n" */
-        int64_t padding_payload_len = unused_bytes - PADDING_OVERHEAD;
-        
-        int64_t padding_header_written = snprintf(padding_start, unused_bytes,
-                                             " __padding__ $%04ld\r\n", 
-                                             padding_payload_len);
-        
-        /* Verify we wrote exactly what we expected (space + __padding__ + space + $ + 4 digits + \r\n = 19 chars) */
-        assert(padding_header_written == 19);
-        
-        /* The gap bytes (padding payload) already exist in the buffer.
-         * The server will read padding_payload_len bytes and discard them.
-         * The final \r\n is already part of the gap bytes. */
-    }
+    return s;
 }
 
-
+/**
+ * Check a buffer for null terminators and optionally report their positions.
+ * 
+ * @param buffer The buffer to check
+ * @param buffer_len Length of the buffer
+ * @param context_name Name to use in debug output (e.g., "tag section", "dummy section")
+ * @param verbose If true, print positions of null bytes found
+ * @return Number of null bytes found
+ */
+static int checkBufferForNulls(const char* buffer, int64_t buffer_len, 
+                                const char* context_name, int verbose) {
+    int null_count = 0;
+    
+    if (verbose) {
+        /* Collect positions for verbose output */
+        for (int64_t i = 0; i < buffer_len; i++) {
+            if (buffer[i] == '\0') {
+                if (null_count == 0) {
+                    fprintf(stderr, "WARNING: Found null terminators in %s at positions:", context_name);
+                }
+                fprintf(stderr, " %ld", i);
+                null_count++;
+            }
+        }
+        
+        if (null_count > 0) {
+            fprintf(stderr, " (total %d null bytes)\n", null_count);
+        }
+    } else {
+        /* Just count without verbose output */
+        for (int64_t i = 0; i < buffer_len; i++) {
+            if (buffer[i] == '\0') {
+                null_count++;
+            }
+        }
+    }
+    
+    return null_count;
+}
 
 typedef struct {
     int64_t is_gt; // 1 if ground truth, 0 if returned neighbor
@@ -1069,6 +1038,7 @@ static float checkNeighbors(uint64_t query_ix,
 
 static void printDatasetRecallStats(void) {
     if (!config.use_dataset || dataset_recall_stats.total_queries == 0) {
+        assert(0);
         return;
     }
 
@@ -1148,7 +1118,6 @@ static int64_t vectorKeyProcessor(const char *key, void *user_data, int64_t thre
     uint64_t vector_id;
     int64_t prefix_len = strlen(config.search.prefix);
     char prefix[256];
-    cluster_tag[6] = '\0';
     if (decode_vector_key_fixed(key,
                                prefix, sizeof(prefix),
                                cluster_tag, sizeof(cluster_tag) ,
@@ -1280,7 +1249,7 @@ static void debugPrintReplyStructure(valkeyReply *reply, int64_t depth, int64_t 
             fprintf(stderr, "\n");
             break;
     }
-    assert(0);
+    // assert(0);
 }
 
 /* Print FT.SEARCH results in a user-friendly format */
@@ -1317,7 +1286,8 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
             // lock mutex to prevent interleaved prints
             pthread_mutex_unlock(&recall_stats_mutex);
         }
-        assert(0);
+        // debugPrintReplyStructure(reply, 0, 3);
+        // assert(0);
         return;
     }
 
@@ -1364,10 +1334,28 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
     size_t expected_results = (size_t)config.search.k;
     if (total_results < expected_results) {
         if (config.search_debug) {
-            printf_results("WARNING: Expected k=%ld results but reply contains only %zu results\n",
+            printf_results("INFO: Expected k=%ld results but reply contains only %zu results\n",
                           config.search.k, total_results);
         }
         expected_results = total_results;
+    }
+    
+    /* Handle zero results case - this can happen with very restrictive filters */
+    if (expected_results == 0) {
+        if (config.use_filtered_search) {
+            printf_results("INFO: Filter returned zero results (k=%ld)\n", config.search.k);
+        } else {
+            fprintf(stderr, "WARNING: Zero results returned for k=%ld (no filter applied)\n", 
+                    config.search.k);
+        }
+        if (config.print_search_results) {
+            pthread_mutex_unlock(&recall_stats_mutex);
+        }
+        /* Free filtered neighbors if allocated */
+        if (config.use_filtered_search && query_neighbors) {
+            dataset_free_neighbors(query_neighbors);
+        }
+        return;
     }
     
     uint64_t result_vec_ids[expected_results];
@@ -1474,18 +1462,51 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
                 continue;
             }
             
-            if (num_vecs_ids < total_results) {
-                gt_vec_ids[num_vecs_ids] = query_neighbors->ids[num_vecs_ids];
-                result_vec_ids[num_vecs_ids++] = vector_id;
+            /* Ensure we don't exceed allocated array bounds */
+            if (num_vecs_ids >= expected_results) {
+                fprintf(stderr, "FATAL ERROR: Received more results (%zu) than expected (%zu). "
+                        "This indicates a mismatch between k=%ld and actual reply structure.\n",
+                        num_vecs_ids + 1, expected_results, config.search.k);
+                fprintf(stderr, "Reply structure:\n");
+                debugPrintReplyStructure(reply, 0, 3);
+                assert(0);
             }
+            
+            gt_vec_ids[num_vecs_ids] = query_neighbors->ids[num_vecs_ids];
+            result_vec_ids[num_vecs_ids++] = vector_id;
         }
     }
     
     /* Verify we got the expected number of results */
-    if (num_vecs_ids != (size_t)config.search.k && num_vecs_ids != total_results) {
-        fprintf(stderr, "WARNING: Expected k=%ld results, parsed %zu vectors, total_results=%zu\n", 
-                config.search.k, num_vecs_ids, total_results);
+    /* With filters, we may get fewer results than k */
+    if (num_vecs_ids > (size_t)config.search.k) {
+        fprintf(stderr, "FATAL ERROR: Received more results (%zu) than requested k=%ld\n", 
+                num_vecs_ids, config.search.k);
+        fprintf(stderr, "Reply structure:\n");
+        debugPrintReplyStructure(reply, 0, 3);
+        assert(0);
     }
+    
+    // if (num_vecs_ids != (size_t)config.search.k && !config.use_filtered_search) {
+    //     fprintf(stderr, "WARNING: Expected k=%ld results but got %zu (total_results=%zu). "
+    //             "This is unexpected without filters.\n",
+    //             config.search.k, num_vecs_ids, total_results);
+    // }
+    
+    if (config.use_filtered_search && num_vecs_ids < (size_t)config.search.k) {
+        if (config.search_debug) {
+            printf_results("INFO: Filter reduced results from k=%ld to %zu vectors\n",
+                          config.search.k, num_vecs_ids);
+        }
+    }
+    
+    /* Sanity check: ensure num_vecs_ids doesn't exceed allocated array size */
+    if (num_vecs_ids > expected_results) {
+        fprintf(stderr, "FATAL ERROR: Internal error - num_vecs_ids (%zu) exceeds expected_results (%zu)\n",
+                num_vecs_ids, expected_results);
+        assert(0);
+    }
+    
     qsort(result_vec_ids, num_vecs_ids, sizeof(uint64_t), uint64_cmp);
     qsort(gt_vec_ids, num_vecs_ids, sizeof(uint64_t), uint64_cmp);
     /* Compare with ground truth if available */
@@ -1507,7 +1528,8 @@ static void processQueryResults(valkeyReply *reply, uint64_t query_idx) {
         printf_results("\n=== ZZZ Ground Truth Comparison [perfect match %ld]===\n", num_perfect_matches);
         for (; i < num_vecs_ids; i++) {
             int64_t found = -1;
-            for (uint32_t j = num_perfect_matches; j < config.search.k; j++) {
+            /* Only search within the ground truth we actually have */
+            for (uint32_t j = num_perfect_matches; j < num_vecs_ids; j++) {
                 if (result_vec_ids[i] == gt_vec_ids[j]) {
                     matches++;
                     found = j;
@@ -1677,26 +1699,32 @@ static sds getSearchKeyTemplate(void) {
         ph_index = 0; 
     }
     key_len += PLACEHOLDERS[ph_index].len;
-    sds key = sdsnewlen("", key_len);
+    sds key = sdsnewlen(NULL, key_len);
     int64_t ret = 0;
     /* Dataset mode - placeholder for entire vector */
     if (config.cluster_mode) {
-        ret = snprintf(key, key_len+1, "%s{tag}:%s", config.search.prefix, PLACEHOLDERS[ph_index].name);
+        ret = snprintf(key, key_len+1, "%s{clt}:%s", config.search.prefix, PLACEHOLDERS[ph_index].name);
     } else {
         ret = snprintf(key, key_len+1, "%s:%s", config.search.prefix, PLACEHOLDERS[ph_index].name);
     }    
+    (void)ret; /* Used in assert */
     assert(ret == (int64_t)(key_len)); // -1 for null terminator    
     return key;
 }
 
 // build tag that is of length config.search.payload_tag_len and starts with PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].name
 static sds createTagTemplate(void) {
+    // create DUMMY sds string with 'Z' char pattern of length config.search.payload_tag_len - PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].len
+    // sds dummy_str = sdsgrownonzero(sdsempty(), config.search.payload_tag_len - PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].len, 'Z');
+
     // create a string of len config.search.payload_tag_len that has repeating 'SHOULD-REPLACE' pattern
-    sds tag = sdsnewlen("", config.search.payload_tag_len);
-    snprintf(tag, config.search.payload_tag_len, "%s", PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].name);
-    memset(tag + strlen(PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].name), 'Z', config.search.payload_tag_len - strlen(PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].name) - 1);
-    tag[config.search.payload_tag_len] = '\0'; // null terminate
+    sds tag = sdscatprintf(sdsempty(), "%s", PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].name);
+    tag = sdsgrownonzero(tag, config.search.payload_tag_len, 'Z');
+    // tag = sdsgrowzero(tag, config.search.payload_tag_len);
+    // printf("DEBUG: Created tag template: %s (len %zu) (expected len %zu) taglen %zu\n", tag, sdslen(tag), config.search.payload_tag_len, PLACEHOLDERS[DATASET_TAG_PLACEHOLDER_INDEX].len);
+
     assert(sdslen(tag) == config.search.payload_tag_len);
+    // sdsfree(dummy_str);
     return tag;
 }
 
@@ -1725,10 +1753,7 @@ static int64_t createSearchHsetTemplate(char **cmd) {
     /* Command and key */
     setArg(argv, argvlen, &argc, "HSET", 4);
     setArg(argv, argvlen, &argc, key, sdslen(key));
-    
-    /* Vector field (always present) */
-    setArg(argv, argvlen, &argc, config.search.vector_field, strlen(config.search.vector_field));
-    setArg(argv, argvlen, &argc, vector_binary, sdslen(vector_binary));    
+       
     /* Tag field (optional) - can be extended to support multiple tag fields
      * Future: could loop through an array of tag fields */
     sds selected_tag = NULL;
@@ -1736,7 +1761,6 @@ static int64_t createSearchHsetTemplate(char **cmd) {
         selected_tag = createTagTemplate();
         setArg(argv, argvlen, &argc, config.search.tag_field, strlen(config.search.tag_field));
         setArg(argv, argvlen, &argc, selected_tag, sdslen(selected_tag));
-        sdsfree(selected_tag);
     }
     
     /* Numeric field (optional) - can be extended to support multiple numeric fields
@@ -1745,28 +1769,23 @@ static int64_t createSearchHsetTemplate(char **cmd) {
         setArg(argv, argvlen, &argc, config.search.numeric_field, strlen(config.search.numeric_field));
         setArg(argv, argvlen, &argc, PLACEHOLDERS[DATASET_NUMERIC_SCORE_PLACEHOLDER_INDEX].name, PLACEHOLDERS[DATASET_NUMERIC_SCORE_PLACEHOLDER_INDEX].len);
     }
-    
+
+    /* Vector field (always present) */
+    setArg(argv, argvlen, &argc, config.search.vector_field, strlen(config.search.vector_field));
+    setArg(argv, argvlen, &argc, vector_binary, sdslen(vector_binary));     
+
     int64_t len = valkeyFormatCommandArgv(cmd, argc, argv, argvlen);
     
-    /* Cleanup allocated strings */
+    /* Cleanup allocated strings - AFTER valkeyFormatCommandArgv uses them */
     sdsfree(key);
     sdsfree(vector_binary);
+    if (selected_tag) sdsfree(selected_tag);
     return len;
 }
 
 /* Benchmark function for vector operations with cluster awareness */
 static int64_t createSearchCmdTemplate(char **cmd) {
     sds index_name = sdsdup(config.search.name);
-    // Check if algorithm is flat or hnsw [case insensitive], if it is flat, append '_flat' to index name. otherwise use index name as is
-    if (strcasecmp(config.search.algorithm, "flat") == 0) {
-        index_name = sdscatprintf(sdsempty(), "%s_flat", config.search.name);
-    } else if (strcasecmp(config.search.algorithm, "hnsw") == 0) {
-        // use index name as is
-    } else {
-        fprintf(stderr, "Unsupported algorithm: %s. Supported algorithms are 'flat' and 'hnsw'.\n", config.search.algorithm);
-        assert(0);
-    }
-
     /* Validation checks */
     printf("Creating FT.SEARCH command template for index '%s' algorithm %s dimension %ld rand-dim %ld k %ld ef_search %ld vector_field %s tag_field %s tag_filter %s nocontent %ld\n", 
         index_name, config.search.algorithm, config.search.vector_dim, VECTOR_NUM_RAND_DIM, 
@@ -1825,16 +1844,10 @@ static int64_t createSearchCmdTemplate(char **cmd) {
     setArg(argv, argvlen, &argc, "LIMIT", 5);
     setArg(argv, argvlen, &argc, "0", 1);
     setArg(argv, argvlen, &argc, k_str, sdslen(k_str));
-    
-    /* RETURN n score_field [vector_field] */
-    setArg(argv, argvlen, &argc, "RETURN", 6);
-    if (!config.search.nocontent) {
-        setArg(argv, argvlen, &argc, config.search.nocontent ? "1" : "2", 1);
-        setArg(argv, argvlen, &argc, score_field, sdslen(score_field));
-        if (!config.search.nocontent) {
-            setArg(argv, argvlen, &argc, config.search.vector_field, strlen(config.search.vector_field));
-        }
-    } else {
+           
+    if (config.search.nocontent) {
+        /* RETURN n score_field [vector_field] */
+        setArg(argv, argvlen, &argc, "RETURN", 6);
         // setArg(argv, argvlen, &argc, "RETURN", 6);
         setArg(argv, argvlen, &argc, "0", 1);
     }
@@ -1851,6 +1864,7 @@ static int64_t createSearchCmdTemplate(char **cmd) {
     
     int64_t len = valkeyFormatCommandArgv(cmd, argc, argv, argvlen);
     
+    sdsfree(filter);
     sdsfree(k_str);
     sdsfree(score_field);
     sdsfree(query);
@@ -1915,15 +1929,7 @@ static void createDefaultSearchIndexes(void) {
     int64_t num_indexes = 1;
     sds indexes_to_create[2] = {config.search.name, NULL};
     sds algorithms[2] = {config.search.algorithm, NULL};
-    // // compare case insensitively
-    // if (strcmp(config.search.algorithm, "hnsw") == 0) {
-    //     algorithms[1] = sdsnew("flat"); /* Fallback to FLAT if HNSW not supported */
-    //     indexes_to_create[1] = sdsdup(config.search.name); /* Same index name for fallback */
-    //     // append _flat to index name
-    //     indexes_to_create[1] = sdscat(indexes_to_create[1], "_flat");
-    //     printf("Configured HNSW index, will also create fallback FLAT index '%s'\n", indexes_to_create[1]);
-    //     num_indexes = 2;
-    // }
+
     for (int64_t i = 0; i < num_indexes; i++) {        
         /* Check if any indexes exist */
         valkeyReply *list_reply = valkeyCommand(ctx, "FT._LIST");
@@ -1935,8 +1941,43 @@ static void createDefaultSearchIndexes(void) {
                 printf("found index '%s' ", list_reply->element[j]->str);
                 if (strcmp(list_reply->element[j]->str, indexes_to_create[i]) == 0) {
                     index_exists = 1;
-                    getFullInfo(indexes_to_create[i], config.selected_node_count, config.cluster_nodes, config.ct);
-                    if (config.clean) {
+                    if (!config.clean) {
+                        /* Get FT.INFO to extract prefix */
+                        valkeyReply *info_reply = valkeyCommand(ctx, "FT.INFO %s", indexes_to_create[i]);
+                        if (info_reply && info_reply->type == VALKEY_REPLY_ARRAY) {
+                            sds extracted_prefix = extractPrefixFromFtInfo(info_reply, config.engine_type);
+                            if (extracted_prefix) {
+                                printf("\nExtracted prefix from existing index: '%s'\n", extracted_prefix);
+                                
+                                /* If user provided a prefix, verify it matches */
+                                if (config.search.prefix && sdslen(config.search.prefix) > 0) {
+                                    if (sdscmp(config.search.prefix, extracted_prefix) != 0) {
+                                        fprintf(stderr, "ERROR: User-provided prefix '%s' does not match index prefix '%s'\n",
+                                                config.search.prefix, extracted_prefix);
+                                        fprintf(stderr, "Please use --search-prefix %s or drop and recreate the index.\n",
+                                                extracted_prefix);
+                                        sdsfree(extracted_prefix);
+                                        if (info_reply) freeReplyObject(info_reply);
+                                        if (list_reply) freeReplyObject(list_reply);
+                                        if (ctx != config.conn_ctx) valkeyFree(ctx);
+                                        assert(0);
+                                    }
+                                    printf("User-provided prefix matches index prefix ✓\n");
+                                    sdsfree(extracted_prefix);
+                                } else {
+                                    /* No user prefix - use the extracted one */
+                                    printf("Using prefix from existing index: '%s'\n", extracted_prefix);
+                                    if (config.search.prefix) sdsfree(config.search.prefix);
+                                    config.search.prefix = extracted_prefix;
+                                }
+                            } else {
+                                fprintf(stderr, "WARNING: Could not extract prefix from FT.INFO response\n");
+                            }
+                        }
+                        if (info_reply) freeReplyObject(info_reply);      
+                        printf("Index '%s' already exists, skipping creation.\n", indexes_to_create[i]);              
+                        getFullInfo(indexes_to_create[i], config.selected_node_count, config.cluster_nodes, config.ct);
+                    } else {
                         printf("Dropping existing index '%s' as --clean is specified\n", indexes_to_create[i]);
                         valkeyReply *drop_reply = valkeyCommand(ctx, "FT.DROPINDEX %s", indexes_to_create[i]);
                         if (drop_reply && (drop_reply->type == VALKEY_REPLY_STRING || drop_reply->type == VALKEY_REPLY_STATUS)) {
@@ -1948,9 +1989,7 @@ static void createDefaultSearchIndexes(void) {
                             assert(0);
                         }
                         if (drop_reply) freeReplyObject(drop_reply);
-                    } else {
-                        printf("Index '%s' already exists, skipping creation.\n", indexes_to_create[i]);
-                    }
+                    } 
                 }            
             }
             printf("\n");
@@ -2220,6 +2259,7 @@ static void replacePlaceholderDataset(
             float *vec_write_pos = (float *)(cmd + vec_indices[i]);
             const char* cluster_tag = NULL;
             uint64_t dataset_idx = 0;
+            
             if (!dataset_prefilled) {
                 /* Determine dataset index to use */
                 do {
@@ -2249,15 +2289,33 @@ static void replacePlaceholderDataset(
                     }
                 }
             }
-
             datasetGetVector((dataset_ctx_t*)config.dataset_ctx, dataset_idx,
-                            &vector_id, vec_write_pos);
+                &vector_id, vec_write_pos);
       
             encode_vector_key_fixed(key, key_len,
                                    NULL,
                                    cluster_tag, // cluster tag may be NULL if dataset is prefilled and no tags, but if tags exist, it must be provided and override existing tag. 
                                    // TODO need to handle case of cluster node mismatch
                                    vector_id);
+                        /* Handle tag field replacement with padding if configured */
+            if (tag_count > 0 && i < tag_count && config.search.tag_field && config.search.payload_tag_len > 0) {
+                char *tag_payload_start = cmd + tag_indices[i];
+                
+                /* Generate actual tag value */
+                sds selected_tag = selectTagByDistribution();
+                int64_t actual_tag_len = selected_tag ? sdslen(selected_tag) : 0;
+                assert(actual_tag_len <= config.search.payload_tag_len);
+                assert(actual_tag_len >= 0);
+                /* Calculate RESP header length - number of digits needed for payload_tag_len */
+                memcpy(tag_payload_start, selected_tag, actual_tag_len);
+                if (actual_tag_len < config.search.payload_tag_len) {
+                    // add ','
+                    tag_payload_start[actual_tag_len] = ',';
+                }
+                
+                if (selected_tag) sdsfree(selected_tag);
+            }
+
             /* Update cluster tag mapping for new insertions (complements initial cluster scan) */
             if (!dataset_prefilled) {
                 char cluster_tag_buf[PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len + 1];
@@ -2272,29 +2330,29 @@ static void replacePlaceholderDataset(
                 } 
                 addClusterTagMapping(&cluster_tag_map, vector_id, cluster_tag_to_map);
             }
-            /* Handle tag field replacement with padding if configured */
-            if (tag_count > 0 && i < tag_count && config.search.tag_field && config.search.payload_tag_len > 0) {
-                char *tag_payload_start = cmd + tag_indices[i];
-                
-                /* Generate actual tag value */
-                sds selected_tag = selectTagByDistribution();
-                int64_t actual_tag_len = selected_tag ? sdslen(selected_tag) : 0;
-                
-                /* Calculate RESP header length - number of digits needed for payload_tag_len */
-                int64_t header_len = snprintf(NULL, 0, "%ld", config.search.payload_tag_len);
-                
-                /* Replace tag field and adjust RESP lengths with padding */
-                replaceTagFieldWithPadding(tag_payload_start, header_len, 
-                                          config.search.payload_tag_len, 
-                                          selected_tag, actual_tag_len);
-                
-                if (selected_tag) sdsfree(selected_tag);
-            }
+
             /* Debug output for first few inserts */
             static int64_t debug_count = 0;
             if (debug_count < 5) {
-                printf("DEBUG INSERT: dataset_idx=%lu, vector_id=%lu, key_str='%s', vec_size=%lu bytes\n",
-                    dataset_idx, vector_id, key, config.search.vector_dim * 4);
+                printf("DEBUG INSERT: dataset_idx=%lu, vector_id=%lu, key_str='%.*s', vec_size=%lu bytes\n",
+                        dataset_idx, vector_id, (int)key_len, key, config.search.vector_dim * 4);
+                // if (tag_count == 0) {
+                //     printf("DEBUG INSERT: dataset_idx=%lu, vector_id=%lu, key_str='%s', vec_size=%lu bytes\n",
+                //         dataset_idx, vector_id, key, config.search.vector_dim * 4);
+                // } else {
+                //     char *tag_payload_start = cmd + tag_indices[i] -6;
+                //     // int64_t header_len = snprintf(NULL, 0, "%ld", config.search.payload_tag_len);
+                //     // char *tag_value_start = tag_payload_start;
+                //     // int64_t tag_value_len = 0;
+                //     // while (tag_value_start[tag_value_len] != '\r' && tag_value_len < config.search.payload_tag_len) {
+                //     //     tag_value_len++;
+                //     // }
+                //     sds tag_value = sdsnewlen(tag_payload_start, config.search.payload_tag_len);
+                //     printf("DEBUG INSERT: dataset_idx=%lu, vector_id=%lu, tag_value='%s', vec_size=%lu bytes\n",
+                //         dataset_idx, vector_id, tag_value, config.search.vector_dim * 4);
+                //     sdsfree(tag_value);
+                //     // printf("DEBUG CMD DUMP:START<\n%.*s\nDEBUG CMD DUMP - END>\n", 1600, cmd);
+                // }
                 debug_count++;
             }
         }
@@ -2446,6 +2504,27 @@ static void replacePlaceholders(client c, char *cmd_data, int64_t cmd_count) {
             );
         }
 
+        /* Verify RESP protocol structure integrity (excluding binary payloads)
+         * Check that null bytes don't appear in RESP text sections.
+         * Binary payloads (like vector data) can legitimately contain null bytes. */
+        if (config.use_dataset && placeholders.count[DATASET_KEY_PLACEHOLDER_INDEX] > 0) {
+            size_t key_start = placeholders.indices[DATASET_KEY_PLACEHOLDER_INDEX][0];
+            /* Key starts after: prefix + cluster_tag + ':' */
+            size_t cluster_tag_len = config.cluster_mode ? PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len : 0;
+            size_t prefix_len = strlen(config.search.prefix);
+            size_t key_field_start = key_start - prefix_len - cluster_tag_len - 1;
+            size_t key_field_len = prefix_len + cluster_tag_len + 1 + PLACEHOLDERS[DATASET_KEY_PLACEHOLDER_INDEX].len;
+            
+            /* Check key field for null bytes (should not have any) */
+            int nulls_in_key = checkBufferForNulls(cmd + key_field_start, key_field_len, 
+                                                    "key field", 0);
+            if (nulls_in_key > 0) {
+                fprintf(stderr, "ERROR: Found %d null bytes in RESP key field (positions [%zu, %zu))\n", 
+                        nulls_in_key, key_field_start, key_field_start + key_field_len);
+                fprintf(stderr, "This indicates a bug in key encoding - RESP keys must not contain null bytes\n");
+                assert(0);
+            }
+        }
     }
 }
 
@@ -2480,17 +2559,23 @@ static void freeClient(client c) {
     sdsfree(c->obuf);
     zfree(c->stagptr);
     if (c->dataset_query_indices) zfree(c->dataset_query_indices);
-    zfree(c);
     if (config.num_threads) pthread_mutex_lock(&(config.liveclients_mutex));
     config.liveclients--;
-    ln = listSearchKey(config.clients, c);
+    list* l;
+    if (c->thread_id >= 0) {
+        l = config.threads[c->thread_id]->clients;
+    } else {
+        l = config.clients;
+    }
+    ln = listSearchKey(l, c);
     assert(ln != NULL);
-    listDelNode(config.clients, ln);
+    listDelNode(l, ln);
+    zfree(c);
     if (config.num_threads) pthread_mutex_unlock(&(config.liveclients_mutex));
 }
 
-static void freeAllClients(void) {
-    listNode *ln = config.clients->head, *next;
+static void freeClientsList(list *clients) {
+    listNode *ln = clients->head, *next;
 
     while (ln) {
         next = ln->next;
@@ -2499,8 +2584,13 @@ static void freeAllClients(void) {
     }
 }
 
+static void freeAllClients(void) {
+    freeClientsList(config.clients);
+}
+
 static void resetClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
+    if (c->paused) releasePausedClient(c);
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
     if (config.ct == VALKEY_CONN_RDMA) {
@@ -2513,7 +2603,7 @@ static void resetClient(client c) {
     /* Reset query index queue for dataset */
     c->dataset_query_head = 0;
     c->dataset_query_tail = 0;
-
+    
     c->running_queries = 0;
     c->latency = -1;
 }
@@ -2527,6 +2617,7 @@ static int64_t findNodeIndex(clusterNode *node) {
     return -1; /* Should never happen if node is valid */
 }
 
+static __thread int64_t num_sleepers = 0;
 /* Acquires the specified number of tokens from the token bucket or calculates the wait time if tokens are not available.
  * This function implements a token bucket rate limiting algorithm to control access to a resource.
  *
@@ -2585,93 +2676,259 @@ static long long acquireTokenOrWait(int64_t tokens) {
     return delay_time / 1000000;
 }
 
-/* Check if we've entered a new cycle and reset all node counters if needed.
- * This function is thread-safe and uses atomic operations to ensure only one
- * thread resets the counters when a new cycle begins. */
-static void checkAndResetCycle(uint64_t now_ns, uint64_t *current_cycle_start) {
-    uint64_t cycle_duration_ns = config.balance_cycle_ms * 1000000ULL;
-    uint64_t old_start = atomic_load_explicit(&config.balance_cycle_start_ns, memory_order_relaxed);
+/* Quota-based node balancing: Check if a node has remaining quota.
+ * 
+ * New Strategy (Quota-based):
+ * 1. Each node starts with a quota (e.g., 1000 requests via balance_quota_step)
+ * 2. Each node tracks completed_requests_since_last_checked (node_request_counters)
+ * 3. When ANY node exhausts its quota:
+ *    a. Find min_completed = MIN(node_request_counters[i]) across all nodes
+ *    b. If min_completed == 0: Sleep (wait for slowest node to make progress)
+ *    c. Else:
+ *       - Calculate quota_to_add = min_completed * (100 + tolerance_pct) / 100
+ *       - Add quota_to_add to all nodes' remaining quota
+ *       - Reset all node_request_counters to 0
+ *       - First client adding quota wakes all sleeping clients
+ * 4. This ensures:
+ *    - Slowest node always completes its work before cycle ends
+ *    - Fast nodes can't get more than initial_quota ahead of slowest
+ *      (because all get same increment based on slowest's progress)
+ *    - Tolerance allows for system jitter (e.g., 10% = fast can be 10% ahead)
+ *    - Natural adaptation to actual throughput
+ * 
+ * Returns delay in milliseconds if node should be throttled, 0 otherwise.
+ */
+static long long checkNodeBalanceThrottle(int64_t thread_id, int64_t node_idx, int64_t tokens) {
+    if (node_idx < 0 || node_idx >= config.selected_node_count) {
+        return 0;
+    }
+    int64_t* node_quota_remaining;
+    int64_t* node_request_counters;
+    if (thread_id == -1) {
+        /* Single-threaded mode: use global counters */
+        node_quota_remaining = config.node_quota_remaining;
+        node_request_counters = config.node_request_counters;
+    } else {
+        assert(config.num_threads > 0 && thread_id < config.num_threads);
+        /* Multi-threaded mode: use per-thread counters */
+        node_quota_remaining = config.threads[thread_id]->node_quota_remaining;
+        node_request_counters = config.threads[thread_id]->node_request_counters;
+    }
     
-    /* Check if we need to start a new cycle */
-    if (old_start == 0 || now_ns >= old_start + cycle_duration_ns) {
-        uint64_t new_start = now_ns;
-        
-        /* Try to atomically update the cycle start time */
-        if (atomic_compare_exchange_strong_explicit(
-                &config.balance_cycle_start_ns,
-                &old_start,
-                new_start,
-                memory_order_release,
-                memory_order_relaxed)) {
-            /* Successfully started new cycle - reset all node counters */
-            for (int64_t i = 0; i < config.selected_node_count; i++) {
-                atomic_store_explicit(&config.node_request_counters[i], 0, memory_order_relaxed);
-            }
+    /* Node has exhausted quota - check if we should start a new cycle
+     * A new cycle starts when the slowest node has completed its quota */
+    
+    /* Find minimum requests completed in current cycle */
+    int64_t min_completed = INT64_MAX;
+    for (int64_t i = 0; i < config.selected_node_count; i++) {
+        uint64_t completed = node_request_counters[i];
+        if (completed < min_completed) {
+            min_completed = completed;
         }
     }
     
-    /* Return the current cycle start time */
-    *current_cycle_start = atomic_load_explicit(&config.balance_cycle_start_ns, memory_order_relaxed);
+    assert(min_completed != INT64_MAX);
+    if (min_completed <= 0) {
+        num_sleepers++;
+        return 1; /* Slowest node hasn't made progress yet - throttle */
+    }
+    /* Calculate how many requests the slowest node needs to complete to finish its quota
+     * Note: quota_remaining can be negative if we allowed burst */
+    for (int64_t i = 0; i < config.selected_node_count; i++) {
+        // compare and swap node_quota_remaining with node_quota_remaining + (min_completed * (100 + tolerance_pct) / 100)
+        node_quota_remaining[i] += (min_completed * (100 + config.balance_tolerance_pct)) / 100;
+        node_request_counters[i] = 0; /* Reset for next cycle */
+    }
+    
+    return 0; /* New quota added - allow request */
 }
 
 /* Acquire tokens for a specific node or calculate wait time if node quota is exhausted.
  * This implements per-node rate limiting to ensure fair distribution across cluster nodes.
  * 
- * Returns the delay time in milliseconds if the node has exhausted its quota,
- * or 0 if the request can proceed immediately. */
-static long long acquireNodeTokenOrWait(int64_t node_idx, int64_t tokens) {
-    if (node_idx < 0 || node_idx >= config.selected_node_count) {
-        return 0; /* Invalid node index, proceed anyway */
+ * NOTE: This function does NOT increment statistics counters - that's done separately in writeHandler.
+ * It uses dynamic balancing to throttle nodes that get too far ahead of the slowest node.
+ * 
+ * Returns the delay time in milliseconds if the node should be throttled,
+//  * or 0 if the request can proceed immediately. */
+// static long long acquireNodeTokenOrWait(int64_t thread_id, int64_t node_idx, int64_t tokens) {
+//     /* Use dynamic balancing strategy: throttle nodes that are >10% ahead of slowest */
+//     return checkNodeBalanceThrottle(thread_id, node_idx, tokens);
+// }
+
+/* Test function to simulate node balancing with different latencies.
+ * 
+ * This test simulates multiple nodes with different request latencies (in ms)
+ * and verifies that the balancing algorithm allows throughput equal to:
+ *   expected_rps = num_nodes / slowest_latency_ms * 1000
+ * 
+ * With 10% tolerance, each node should achieve approximately the same RPS as the slowest node.
+ * 
+ * Input: Array of latencies in milliseconds for each node
+ * Example: [3000, 1000, 3000, 5000, 550, 100, 9000] means:
+ *   - Slowest node has 9000ms latency = 0.111 rps
+ *   - Expected balanced throughput = 7 nodes * 0.111 rps = 0.778 rps total
+ *   - Each node should do ~0.111 rps (within 10% tolerance)
+ */
+static void testNodeBalancing(int64_t *latencies_ms, int64_t num_nodes, int64_t duration_sec) {
+    printf("\n=== Node Balance Test ===\n");
+    printf("Testing %ld nodes for %ld seconds\n", num_nodes, duration_sec);
+    
+    /* Find slowest node and calculate expected RPS */
+    int64_t max_latency_ms = 0;
+    for (int64_t i = 0; i < num_nodes; i++) {
+        printf("  Node %ld: %ld ms latency\n", i, latencies_ms[i]);
+        if (latencies_ms[i] > max_latency_ms) {
+            max_latency_ms = latencies_ms[i];
+        }
     }
     
-    uint64_t now_ns = nstime();
-    uint64_t cycle_start_ns;
+    double slowest_node_rps = 1000.0 / max_latency_ms;
+    double expected_total_rps = slowest_node_rps * num_nodes;
     
-    /* Check and potentially reset the cycle */
-    checkAndResetCycle(now_ns, &cycle_start_ns);
+    printf("\nSlowest node: %ld ms = %.3f rps\n", max_latency_ms, slowest_node_rps);
+    printf("Expected balanced total: %.3f rps (%.3f per node)\n", expected_total_rps, slowest_node_rps);
+    printf("Expected tolerance: +/- 10%%\n\n");
     
-    /* Try to acquire tokens for this node */
-    uint64_t old_count = atomic_load_explicit(&config.node_request_counters[node_idx], memory_order_relaxed);
-    uint64_t new_count;
+    /* Save original config */
+    int64_t orig_node_count = config.selected_node_count;
+    int64_t orig_quota_step = config.balance_quota_step;
+    int64_t orig_tolerance = config.balance_tolerance_pct;
+    int64_t *orig_counters = config.node_request_counters;
+    int64_t *orig_quota = config.node_quota_remaining;
     
+    /* Setup test config with quota-based balancing */
+    config.selected_node_count = num_nodes;
+    config.balance_quota_step = 10;  /* Start with small quota for testing */
+    config.balance_tolerance_pct = 10;
+    config.node_request_counters = zcalloc(sizeof(int64_t) * num_nodes);
+    config.node_quota_remaining = zcalloc(sizeof(int64_t) * num_nodes);
+    
+    printf("Using quota-based balancing: %ld requests per cycle\n", config.balance_quota_step);
+    
+    /* Initialize counters and quotas */
+    for (int64_t i = 0; i < num_nodes; i++) {
+        config.node_quota_remaining[i] = config.balance_quota_step;
+    }
+    
+    /* Simulate requests for each node */
+    uint64_t *total_requests = zcalloc(sizeof(uint64_t) * num_nodes);
+    uint64_t *total_throttled_ms = zcalloc(sizeof(uint64_t) * num_nodes);
+    
+    uint64_t start_time_ns = nstime();
+    uint64_t duration_ns = duration_sec * 1000000000ULL;
+    uint64_t *next_available_ns = zcalloc(sizeof(uint64_t) * num_nodes);
+    
+    /* Initialize all nodes as available now */
+    for (int64_t i = 0; i < num_nodes; i++) {
+        next_available_ns[i] = start_time_ns;
+    }
+    
+    printf("Simulating requests...\n");
+    
+    int debug_counter = 0;
     while (1) {
-        new_count = old_count + tokens;
+        uint64_t now_ns = nstime();
+        if (now_ns - start_time_ns >= duration_ns) {
+            break;
+        }
         
-        /* Check if this would exceed the node's quota */
-        if (new_count > (uint64_t)config.requests_per_node_per_cycle) {
-            /* Node quota exhausted - calculate delay until next cycle */
-            uint64_t cycle_duration_ns = config.balance_cycle_ms * 1000000ULL;
-            uint64_t cycle_end_ns = cycle_start_ns + cycle_duration_ns;
-            
-            if (now_ns >= cycle_end_ns) {
-                /* We're already past the cycle end, retry (cycle will reset) */
-                checkAndResetCycle(now_ns, &cycle_start_ns);
-                old_count = atomic_load_explicit(&config.node_request_counters[node_idx], memory_order_relaxed);
-                continue;
+        /* Try to send request from each node if it's available */
+        for (int64_t node = 0; node < num_nodes; node++) {
+            if (now_ns >= next_available_ns[node]) {
+                /* Node is ready to send a request */
+                
+                /* Check if balancing would throttle this node (check BEFORE incrementing) */
+                long long delay_ms = checkNodeBalanceThrottle(-1, node, 1);
+                
+                if (debug_counter < 50) {
+                    int64_t quota = config.node_quota_remaining[node];
+                    printf("[Debug %d] Node %ld: quota=%ld, delay=%lld ms\n",
+                           debug_counter, node, quota, delay_ms);
+                    debug_counter++;
+                }
+                
+                if (delay_ms > 0) {
+                    /* Throttled - don't increment, add delay */
+                    total_throttled_ms[node] += delay_ms;
+                    next_available_ns[node] = now_ns + (delay_ms * 1000000ULL);
+                } else {
+                    config.node_request_counters[node] += 1;
+                    config.node_quota_remaining[node] -= 1;
+                    total_requests[node]++;
+                    
+                    /* Node will be busy for its latency duration */
+                    next_available_ns[node] = now_ns + (latencies_ms[node] * 1000000ULL);
+                }
             }
-            
-            uint64_t delay_ns = cycle_end_ns - now_ns;
-            return (delay_ns / 1000000) + 1; /* Convert to ms, add 1ms buffer */
         }
         
-        /* Try to atomically increment the counter */
-        if (atomic_compare_exchange_weak_explicit(
-                &config.node_request_counters[node_idx],
-                &old_count,
-                new_count,
-                memory_order_release,
-                memory_order_relaxed)) {
-            /* Successfully acquired tokens */
-            return 0;
-        }
+        /* Small sleep to avoid burning CPU (simulate event loop) */
+        usleep(1000); /* 1 millisecond - check frequently to catch imbalance early */
+    }
+    
+    uint64_t end_time_ns = nstime();
+    double actual_duration_sec = (end_time_ns - start_time_ns) / 1000000000.0;
+    
+    printf("\n=== Results after %.2f seconds ===\n", actual_duration_sec);
+    
+    uint64_t total_all_requests = 0;
+    uint64_t min_requests = UINT64_MAX;
+    uint64_t max_requests = 0;
+    
+    for (int64_t i = 0; i < num_nodes; i++) {
+        double node_rps = total_requests[i] / actual_duration_sec;
+        double node_throttle_pct = (total_throttled_ms[i] * 100.0) / (actual_duration_sec * 1000.0);
         
-        /* CAS failed, retry with updated old_count */
+        printf("Node %ld: %lu requests (%.3f rps) - throttled %.1f%% of time\n",
+               i, total_requests[i], node_rps, node_throttle_pct);
+        
+        total_all_requests += total_requests[i];
+        if (total_requests[i] < min_requests) min_requests = total_requests[i];
+        if (total_requests[i] > max_requests) max_requests = total_requests[i];
+    }
+    
+    double actual_total_rps = total_all_requests / actual_duration_sec;
+    double imbalance_pct = min_requests > 0 ? 
+        ((double)(max_requests - min_requests) / min_requests * 100.0) : 0;
+    
+    printf("\nTotal: %lu requests (%.3f rps)\n", total_all_requests, actual_total_rps);
+    printf("Expected: %.3f rps\n", expected_total_rps);
+    printf("Imbalance: %.1f%% (min=%lu, max=%lu)\n", imbalance_pct, min_requests, max_requests);
+    
+    /* Check if within tolerance */
+    int passed = 1;
+    if (imbalance_pct > 15.0) { /* Allow 15% due to simulation granularity */
+        printf("❌ FAILED: Imbalance %.1f%% exceeds 15%% tolerance\n", imbalance_pct);
+        passed = 0;
+    } else {
+        printf("✓ PASSED: Imbalance %.1f%% within tolerance\n", imbalance_pct);
+    }
+    
+    /* Restore original config */
+    config.selected_node_count = orig_node_count;
+    config.balance_quota_step = orig_quota_step;
+    config.balance_tolerance_pct = orig_tolerance;
+    zfree(config.node_request_counters);
+    zfree(config.node_quota_remaining);
+    config.node_request_counters = orig_counters;
+    config.node_quota_remaining = orig_quota;
+    
+    zfree(total_requests);
+    zfree(total_throttled_ms);
+    zfree(next_available_ns);
+    
+    printf("=========================\n\n");
+    
+    if (!passed) {
+        exit(1);
     }
 }
 
 static void clientDone(client c) {
     int64_t requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     if (requests_finished >= config.requests) {
+        
         freeClient(c);
         if (!config.num_threads && config.el) aeStop(config.el);
         return;
@@ -2681,7 +2938,7 @@ static void clientDone(client c) {
     } else {
         if (config.num_threads) pthread_mutex_lock(&(config.liveclients_mutex));
         config.liveclients--;
-        createMissingClients(c);
+        createMissingClients("", 0, 1);
         config.liveclients++;
         if (config.num_threads) pthread_mutex_unlock(&(config.liveclients_mutex));
         freeClient(c);
@@ -2854,44 +3111,25 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(el);
     UNUSED(fd);
     UNUSED(mask);
-
+    assert( config.pipeline > 0 );
     /* Priority 1: Check node balancing quota (more restrictive) 
      * Only enforce during actual benchmark phase.
      * We activate node balancing only when benchmark requests start being issued.
      * This excludes all setup phases: init, info fetch, backfill, prefill, etc. */
-    if (config.balance_nodes && config.node_request_counters && c->cluster_node) {
-        /* Only apply balancing once actual benchmark requests start
-         * (requests_issued > 0 means benchmark started, prefix_pending == 0 means setup done) */
-        int64_t requests_issued = atomic_load_explicit(&config.requests_issued, memory_order_relaxed);
-        
-        if (requests_issued > 0 && c->prefix_pending == 0) {
-            int64_t node_idx = findNodeIndex(c->cluster_node);
-            if (node_idx >= 0) {
-                long long delay = acquireNodeTokenOrWait(node_idx, config.pipeline);
-
-                if (delay) {
-                    int64_t thread_id = c->thread_id;
-                    int64_t paused_clients_count = 0;
-
-                    c->paused = 1;
-                    aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
-
-                    benchmarkThread *thread = NULL;
-                if (thread_id < 0) {
-                    paused_clients_count = listLength(config.paused_clients);
-                    listAddNodeTail(config.paused_clients, c);
-                } else {
-                    thread = config.threads[thread_id % config.num_threads];
-                    paused_clients_count = listLength(thread->paused_clients);
-                    listAddNodeTail(thread->paused_clients, c);
-                }
-                if (paused_clients_count == 0) {
-                    /* Create a time event to awaken the client. */
-                    aeCreateTimeEvent(el, delay, awakenPausedClient, (void *)thread, NULL);
-                }
-                return;
+    if (c->written == 0 && config.balance_nodes && config.node_request_counters && c->cluster_node && c->thread_id != -1) {
+        assert(c->thread_id < config.num_threads);
+        int64_t node_idx = findNodeIndex(c->cluster_node);
+        if (node_idx >= 0) {
+            if (c->prefix_pending == 0 && config.threads[c->thread_id]->node_quota_remaining[node_idx] < config.pipeline) {
+                // If quota is already exhausted, check if we should throttle
+                if (checkNodeBalanceThrottle(c->thread_id, node_idx, config.pipeline)) {
+                    // Throttle: simply return and try again later
+                    return;
                 }
             }
+            config.threads[c->thread_id]->node_request_counters[node_idx] += config.pipeline;
+            config.threads[c->thread_id]->node_quota_remaining[node_idx] -= config.pipeline;
+            
         }
     }
 
@@ -2956,6 +3194,17 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     return;
                 } else if (nwritten > 0) {
                     c->written += nwritten;
+                    /* Ensure WRITABLE event is registered to complete the write */
+                    if (config.ct != VALKEY_CONN_RDMA) {
+                        aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
+                    }
+                    return;
+                } else {
+                    /* nwritten == -1 && errno == EAGAIN: would block, try again later */
+                    /* Ensure WRITABLE event is registered for retry */
+                    if (config.ct != VALKEY_CONN_RDMA) {
+                        aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
+                    }
                     return;
                 }
             } else {
@@ -2995,17 +3244,23 @@ static client createClient(char *cmd, int64_t len, int64_t seqlen, client from, 
     int port = config.conn_info.hostport;
     struct timeval tv = {0};
     if (config.selected_node_count > 0) {
+        int num_clients;
         /* If the user specified a list of nodes, use them in a round-robin
          * fashion. */
         int64_t node_idx = 0;
-        /* Simple round-robin based on client count */
-        node_idx = config.liveclients % config.selected_node_count;
+        if (thread_id >= 0) {
+            benchmarkThread *thread = config.threads[thread_id];
+            num_clients = listLength(thread->clients);
+        } else {
+            num_clients = config.liveclients;
+        }
+        node_idx = num_clients % config.selected_node_count;
         clusterNode *node = config.selected_nodes[node_idx];
         assert(node != NULL);
         ip = node->ip;
         port = node->port;
         c->cluster_node = node;
-    } 
+    }
 
     c->context = valkeyConnectWrapper(config.ct, ip, port, tv, 1, config.mptcp);
     if (c->context->err) {
@@ -3081,7 +3336,7 @@ static client createClient(char *cmd, int64_t len, int64_t seqlen, client from, 
         c->prefix_pending++;
     }
 
-    if (config.read_from_replica == FROM_REPLICA_ONLY || config.read_from_replica == FROM_ALL) {
+    if ((!c->cluster_node || c->cluster_node->is_replica) && (config.read_from_replica == FROM_REPLICA_ONLY || config.read_from_replica == FROM_ALL)) {
         char *buf = NULL;
         int64_t len;
         len = valkeyFormatCommand(&buf, "READONLY");
@@ -3123,23 +3378,26 @@ static client createClient(char *cmd, int64_t len, int64_t seqlen, client from, 
             c->staglen = 0;
             c->stagfree = RANDPTR_INITIAL_SIZE;
             c->stagptr = zcalloc(sizeof(char *) * c->stagfree);
-            while ((p = strstr(p, "{tag}")) != NULL) {
+            while ((p = strstr(p, "{clt}")) != NULL) {
                 if (c->stagfree == 0) {
                     c->stagptr = zrealloc(c->stagptr, sizeof(char *) * c->staglen * 2);
                     c->stagfree += c->staglen;
                 }
                 c->stagptr[c->staglen++] = p;
                 c->stagfree--;
-                p += PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len; /* 5 is strlen("{tag}"). */
+                p += PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len; /* 5 is strlen("{clt}"). */
             }
         }
     }
     aeEventLoop *el = NULL;
-    if (thread_id < 0)
+    if (thread_id < 0) {
         el = config.el;
-    else {
-        benchmarkThread *thread = config.threads[thread_id % config.num_threads];
+        listAddNodeTail(config.clients, c);
+    } else {
+        assert(thread_id < config.num_threads);
+        benchmarkThread *thread = config.threads[thread_id];
         el = thread->el;
+        listAddNodeTail(thread->clients, c);
     }
     if (config.idlemode == 0) {
         if (config.ct == VALKEY_CONN_RDMA) {
@@ -3151,27 +3409,36 @@ static client createClient(char *cmd, int64_t len, int64_t seqlen, client from, 
         /* In idle mode, clients still need to register readHandler for catching errors */
         aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
 
-    listAddNodeTail(config.clients, c);
-    atomic_fetch_add_explicit(&config.liveclients, 1, memory_order_relaxed);
+    config.liveclients++;
 
     c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
     return c;
 }
 
-static void createMissingClients(client c) {
+// Thread create missing clients, round robin on the selected nodes 
+static void createMissingThreadClients(char *cmd, int64_t len, int64_t seqlen, benchmarkThread *thread, int64_t n_requested) {
+    int64_t missing_clients = n_requested - listLength(thread->clients);
     int64_t n = 0;
-    while (config.liveclients < config.numclients) {
-        int64_t thread_id = -1;
-        if (config.num_threads > 0) {
-            thread_id = config.liveclients % config.num_threads;
-        }
-        createClient(NULL, 0, 0, c, thread_id);
+    while (missing_clients > 0) {
+        createClient(cmd, len, seqlen, NULL, thread->index);
 
         /* Listen backlog is quite limited on most systems */
         if (++n > 64) {
             usleep(50000);
             n = 0;
         }
+        missing_clients--;
+    }
+}
+
+static void createMissingClients(char *cmd, int64_t len, int64_t seqlen) {
+    int64_t clients_per_thread = config.numclients;
+    if (config.num_threads > 0) {
+        clients_per_thread = (config.numclients + config.num_threads - 1) / config.num_threads;
+    }
+    for (int64_t thread_id = 0; thread_id < config.num_threads; thread_id++) {
+        benchmarkThread *thread = config.threads[thread_id];
+        createMissingThreadClients(cmd, len, seqlen, thread, clients_per_thread);
     }
 }
 
@@ -3317,8 +3584,7 @@ static mstime_t snapshot_time = 0;
 /* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
  * seqlen is the number of commands included in cmd. */
 static void benchmarkSequence(const char *title, char *cmd, int64_t len, int64_t seqlen) {
-    client c;
-
+    if (interrupted) return;
     config.title = title;
     config.requests_issued = 0;
     config.requests_finished = 0;
@@ -3366,58 +3632,28 @@ static void benchmarkSequence(const char *title, char *cmd, int64_t len, int64_t
             exit(1);
         }
         
-        /* Calculate quota per node per cycle
-         * The quota represents the maximum number of requests each node can handle per cycle.
-         * We base this on either:
-         * 1. If RPS is set: distribute RPS evenly across nodes for the cycle duration
-         * 2. Otherwise: use a heuristic based on clients * pipeline * cycle_duration
-         */
-        if (config.rps > 0) {
-            /* If RPS is set, divide it evenly among nodes and scale by cycle duration */
-            int64_t rps_per_node = config.rps / config.selected_node_count;
-            /* Convert cycle duration from ms to fraction of second, then multiply by RPS */
-            config.requests_per_node_per_cycle = (rps_per_node * config.balance_cycle_ms) / 1000;
-            if (config.requests_per_node_per_cycle == 0) {
-                config.requests_per_node_per_cycle = 1;
-            }
-        } else {
-            /* Without RPS limit, we want to enforce strict fairness.
-             * Set a quota that's small enough to force balance but large enough
-             * to not starve throughput. A good heuristic: allow each client
-             * on this node to issue 'pipeline' requests per cycle.
-             * 
-             * quota = (numclients / node_count) * pipeline
-             * 
-             * This ensures all nodes exhaust quota at roughly the same time. */
-            int64_t clients_per_node = (config.numclients + config.selected_node_count - 1) / config.selected_node_count;
-            config.requests_per_node_per_cycle = clients_per_node * config.pipeline;
-            
-            if (config.requests_per_node_per_cycle == 0) {
-                config.requests_per_node_per_cycle = 1; /* Minimum quota */
-            }
+        /* Allocate node request counters and quota arrays */
+        config.node_request_counters = zcalloc(sizeof(int64_t) * config.selected_node_count);
+        config.node_quota_remaining = zcalloc(sizeof(int64_t) * config.selected_node_count);
+        
+        /* Initialize each node with starting quota */
+        for (int64_t i = 0; i < config.selected_node_count; i++) {
+            config.node_request_counters[i] = 0;
+            config.node_quota_remaining[i] = config.balance_quota_step;
         }
         
-        /* Allocate node request counters */
-        config.node_request_counters = zcalloc(sizeof(atomic_uint_fast64_t) * config.selected_node_count);
-        
-        /* Initialize cycle start time (will be set on first request) */
-        atomic_store_explicit(&config.balance_cycle_start_ns, 0, memory_order_relaxed);
-        
         if (!config.quiet) {
-            printf("Node balancing enabled:\n");
+            printf("Node balancing enabled (quota-based):\n");
             printf("  Nodes: %ld\n", config.selected_node_count);
-            printf("  Quota per node: %ld requests per %ldms cycle\n",
-                   config.requests_per_node_per_cycle,
-                   config.balance_cycle_ms);
+            printf("  Quota per cycle: %ld requests per node\n", config.balance_quota_step);
+            printf("  Tolerance: %ld%%\n", config.balance_tolerance_pct);
             printf("  Total clients: %ld (%.1f per node)\n",
                    config.numclients,
                    (double)config.numclients / config.selected_node_count);
         }
     }
 
-    int64_t thread_id = config.num_threads > 0 ? 0 : -1;
-    c = createClient(cmd, len, seqlen, NULL, thread_id);
-    createMissingClients(c);
+    createMissingClients(cmd, len, seqlen);
     
     config.start = mstime();    
     if (!config.num_threads)
@@ -3439,9 +3675,9 @@ static void benchmarkSequence(const char *title, char *cmd, int64_t len, int64_t
         after_info_all = getInfoCluster(config.selected_node_count, config.selected_nodes, config.ct);
         if (last_info_all != NULL && last_ftinfo != NULL && last_search_info != NULL) {
             // Compare snapshots and print diffs
-        }
-        compareInfoSnapshots(config.selected_node_count, config.selected_nodes, config.ct,
+            compareInfoSnapshots(config.selected_node_count, config.selected_nodes, config.ct,
                              last_info_all, after_info_all, last_ftinfo, after_ftinfo, last_search_info, after_search_info);
+        }
         freeClusterSnapshot(last_search_info);
         freeClusterSnapshot(last_ftinfo);
         freeClusterSnapshot(last_info_all);
@@ -3464,9 +3700,24 @@ static void benchmarkSequence(const char *title, char *cmd, int64_t len, int64_t
         showLatencyReport();
     }
     freeAllClients();
+    /* Free the paused clients list (clients themselves are already freed) */
+    if (config.paused_clients) {
+        listRelease(config.paused_clients);
+        config.paused_clients = listCreate();
+    }
     if (config.threads) freeBenchmarkThreads();
-    if (config.current_sec_latency_histogram) hdr_close(config.current_sec_latency_histogram);
-    if (config.latency_histogram) hdr_close(config.latency_histogram);
+    
+    /* Only free histograms if we're not preserving them for later use */
+    if (!config.preserve_histograms) {
+        if (config.current_sec_latency_histogram) {
+            hdr_close(config.current_sec_latency_histogram);
+            config.current_sec_latency_histogram = NULL;
+        }
+        if (config.latency_histogram) {
+            hdr_close(config.latency_histogram);
+            config.latency_histogram = NULL;
+        }
+    }
     
     /* Cleanup node balancing resources */
     if (config.node_request_counters) {
@@ -3509,19 +3760,21 @@ static void measureBaselineLatency(void) {
     int64_t saved_quiet = config.quiet;
     int64_t saved_csv = config.csv;
     const char *saved_title = config.title;
+    int64_t saved_skip_latency_report = config.skip_latency_report;
     
     /* Set to single-threaded, single-client for pure network measurement */
     config.numclients = 1;
-    config.num_threads = 0;
+    config.num_threads = 1;
     config.requests = 10000;
     config.quiet = 1;  /* Suppress all output during baseline measurement */
     config.csv = 0;    /* Don't output CSV for baseline */
     config.skip_latency_report = 1;  /* Don't show latency report for baseline */
+    config.preserve_histograms = 1;  /* Don't free histograms so we can read them */
     
     /* Run PING_INLINE benchmark (minimal overhead) - silently */
     benchmark("BASELINE_LATENCY", "PING\r\n", 6);
     
-    /* Collect baseline metrics from histogram */
+    /* Collect baseline metrics from histogram (preserved by benchmarkSequence) */
     if (config.latency_histogram && config.latency_histogram->total_count > 0) {
         baseline_latency.avg_latency_ms = hdr_mean(config.latency_histogram) / 1000.0;
         baseline_latency.min_latency_ms = ((double)hdr_min(config.latency_histogram)) / 1000.0;
@@ -3533,6 +3786,16 @@ static void measureBaselineLatency(void) {
         baseline_latency.measured = 1;
     }
     
+    /* Clean up the histogram created during baseline measurement */
+    if (config.latency_histogram) {
+        hdr_close(config.latency_histogram);
+        config.latency_histogram = NULL;
+    }
+    if (config.current_sec_latency_histogram) {
+        hdr_close(config.current_sec_latency_histogram);
+        config.current_sec_latency_histogram = NULL;
+    }
+    
     /* Restore original configuration */
     config.numclients = saved_clients;
     config.num_threads = saved_threads;
@@ -3540,31 +3803,55 @@ static void measureBaselineLatency(void) {
     config.quiet = saved_quiet;
     config.csv = saved_csv;
     config.title = saved_title;
-    config.skip_latency_report = 0;  /* Re-enable latency reports */
+    config.skip_latency_report = saved_skip_latency_report;
+    config.preserve_histograms = 0;  /* Reset to default behavior */
     
     /* Mark as measured in config */
     config.baseline_measured = 1;
 }
 
-/* Thread functions. */
 
+/* Thread functions. */
 static benchmarkThread *createBenchmarkThread(int64_t index) {
     benchmarkThread *thread = zcalloc(sizeof(*thread));
     if (thread == NULL) return NULL;
     thread->index = index;
     thread->el = aeCreateEventLoop(1024 * 10);
     thread->paused_clients = listCreate();
+    thread->clients = listCreate();
+    /* Allocate node request counters and quota arrays */
+    thread->node_request_counters = zcalloc(sizeof(int64_t) * config.selected_node_count);
+    thread->node_quota_remaining = zcalloc(sizeof(int64_t) * config.selected_node_count);
+
+    /* Initialize each node with starting quota */
+    for (int64_t i = 0; i < config.selected_node_count; i++) {
+        thread->node_quota_remaining[i] = config.balance_quota_step;
+    }
     /* Note: Recall statistics are aggregated globally and shown in main output,
      * not per-thread, since recall is computed across all queries. */
     aeCreateTimeEvent(thread->el, 1, showThroughput, (void *)thread, NULL);
     return thread;
 }
 
+
+
 static void freeBenchmarkThread(benchmarkThread *thread) {
-    if (thread->el) aeDeleteEventLoop(thread->el);
+    // Free clients BEFORE freeing the event loop they reference
+    freeClientsList(thread->clients);
     listRelease(thread->paused_clients);
+    listRelease(thread->clients);
+    
+    // Now safe to free the event loop
+    if (thread->el) aeDeleteEventLoop(thread->el);
+
+    zfree(thread->node_request_counters);
+    zfree(thread->node_quota_remaining);
     zfree(thread);
 }
+
+
+
+
 
 static void freeBenchmarkThreads(void) {
     int64_t i = 0;
@@ -4459,14 +4746,14 @@ static sds selectTagByDistribution(void) {
 
 void setDefaultSearchConfig(void) {
     config.search.name = sdsnew("test_vector_index");
-    config.search.prefix = sdsnew("vec:");
+    config.search.prefix = NULL;//sdsnew("vec:");
     config.search.vector_field = sdsnew("vector_field");
     config.search.vector_dim = 128; // Default vector dimension
     config.search.ef_construction = 256; // Default EF Construction
     config.search.ef_search = 256; // Default EF Search
     config.search.m = 16; // Default HNSW M parameter
     config.search.tag_field = NULL; // No tag field by default
-    config.search.payload_tag_len = 1024; // Default max tag length
+    config.search.payload_tag_len = 128; // Default max tag length
     config.search.numeric_field = NULL; // No numeric field by default
     config.search.k = 10; // Default K for KNN queries
     config.search.curr_conf.tag_dists = NULL;
@@ -4477,6 +4764,10 @@ void setDefaultSearchConfig(void) {
     config.search.nocontent = 0; // exclude content by default
     config.search.localonly = 0; // Default LOCALONLY option
 }
+
+/* Forward declaration */
+static void cleanupConfig(void);
+
 /* Returns number of consumed options. */
 int parseOptions(int argc, char **argv) {
     int64_t i;
@@ -4497,6 +4788,7 @@ int parseOptions(int argc, char **argv) {
             sds version = cliVersion();
             printf("valkey-benchmark %s\n", version);
             sdsfree(version);
+            cleanupConfig();
             exit(0);
         } else if (!strcmp(argv[i], "-n")) {
             if (lastarg) goto invalid;
@@ -4533,13 +4825,28 @@ int parseOptions(int argc, char **argv) {
             config.rps = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--balance-nodes")) {
             config.balance_nodes = 1;
-        } else if (!strcmp(argv[i], "--balance-cycle-ms")) {
+        } else if (!strcmp(argv[i], "--balance-quota-step")) {
             if (lastarg) goto invalid;
-            config.balance_cycle_ms = atoi(argv[++i]);
-            if (config.balance_cycle_ms <= 0) {
-                fprintf(stderr, "Invalid balance cycle duration (must be > 0)\n");
+            config.balance_quota_step = atoi(argv[++i]);
+            if (config.balance_quota_step <= 0) {
+                fprintf(stderr, "Invalid balance quota step (must be > 0)\n");
                 exit(1);
             }
+        } else if (!strcmp(argv[i], "--balance-tolerance")) {
+            if (lastarg) goto invalid;
+            config.balance_tolerance_pct = atoi(argv[++i]);
+            if (config.balance_tolerance_pct < 0 || config.balance_tolerance_pct > 100) {
+                fprintf(stderr, "Invalid balance tolerance (must be 0-100)\n");
+                exit(1);
+            }
+        } else if (!strcmp(argv[i], "--test-balance")) {
+            /* Test node balancing algorithm with simulated latencies */
+            printf("Running node balance test...\n");
+            int64_t test_latencies[] = {3000, 1000, 3000, 5000, 550, 100, 9000};
+            int64_t num_test_nodes = sizeof(test_latencies) / sizeof(test_latencies[0]);
+            testNodeBalancing(test_latencies, num_test_nodes, 10); /* 10 second test */
+            cleanupConfig();
+            exit(0);
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
             parseUri(argv[++i], "valkey-benchmark", &config.conn_info, &config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
@@ -4770,9 +5077,11 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--clear-config")) {
             if (config_persist_clear() == 0) {
                 printf("Configuration cleared successfully.\n");
+                cleanupConfig();
                 exit(0);
             } else {
                 fprintf(stderr, "Failed to clear configuration.\n");
+                cleanupConfig();
                 exit(1);
             }
         } else if (!strcmp(argv[i], "--show-config")) {
@@ -4784,6 +5093,7 @@ int parseOptions(int argc, char **argv) {
             } else {
                 printf("No saved configuration found.\n");
             }
+            cleanupConfig();
             exit(0);
         } else if (!strcmp(argv[i], "--help")) {
             exit_status = 0;
@@ -4982,7 +5292,7 @@ usage:
         "__rand_1st__        Like __rand_int__ but multiple occurrences will have the same\n"
         "                    value. __rand_2nd__ through __rand_9th__ are also available.\n"
         " __data__           Replaced with data of the size specified by the -d option.\n"
-        " {tag}              Replaced with a tag that routes the command to each node in\n"
+        " {clt}              Replaced with a tag that routes the command to each node in\n"
         "                    a cluster. Include this in key names when running in cluster\n"
         "                    mode.\n"
         "\n",
@@ -5007,7 +5317,7 @@ usage:
         " --threads <num>    Enable multi-thread mode.\n"
         " --cluster          Enable cluster mode.\n"
         "                    If the command is supplied on the command line in cluster\n"
-        "                    mode, the key must contain \"{tag}\". Otherwise, the\n"
+        "                    mode, the key must contain \"{clt}\". Otherwise, the\n"
         "                    command will not be sent to the right cluster node.\n"
         " --rfr <mode>       Enable read from replicas in cluster mode.\n"
         "                    This command must be used with the --cluster option.\n"
@@ -5053,10 +5363,15 @@ usage:
         " -I                 Idle mode. Just open N idle connections and wait.\n"
         " -x                 Read last argument from STDIN.\n"
         " --rps <requests>   Limit the total number of requests per second. Default 0 (no limit)\n"
-        " --balance-nodes    Enable fair load distribution across cluster nodes.\n"
-        "                    Ensures each node gets equal quota per time cycle.\n"
-        " --balance-cycle-ms <ms> Time cycle duration for node balancing in milliseconds.\n"
-        "                    Default 1000ms. Only used with --balance-nodes.\n"
+        " --balance-nodes    Enable fair load distribution across cluster nodes using quota-based balancing.\n"
+        "                    Each node gets a quota of requests per cycle. When the slowest node\n"
+        "                    completes its quota, all nodes get refreshed quota and continue.\n"
+        " --balance-quota-step <num> Number of requests each node can process per cycle.\n"
+        "                    Default 1000. Only used with --balance-nodes.\n"
+        " --balance-tolerance <pct> Tolerance percentage for node imbalance (0-100).\n"
+        "                    Default 10. Only used with --balance-nodes.\n"
+        " --test-balance     Run node balancing algorithm test and exit.\n"
+        "                    Simulates nodes with different latencies to verify balancing.\n"
         " --seed <num>       Set the seed for random number generator. Default seed is based on time.\n"
         " --num-functions <num>\n"
         "                    Sets the number of functions present in the Lua lib that is\n"
@@ -5102,7 +5417,140 @@ usage:
         "                         incr counter ';' exec\n\n",
         search_examples,
         " For more information, see the Valkey documentation at https://valkey.io.\n");
+    cleanupConfig();
     exit(exit_status);
+}
+
+/* Cleanup function to free all allocated resources */
+static void cleanupConfig(void) {
+    /* Cleanup saved config if it exists */
+    if (g_saved_config) {
+        config_persist_free(g_saved_config);
+        zfree(g_saved_config);
+        g_saved_config = NULL;
+    }
+
+    /* Cleanup cluster nodes */
+    if (config.cluster_nodes) freeClusterNodes();
+    if (config.selected_nodes) {
+        zfree(config.selected_nodes);
+        config.selected_nodes = NULL;
+    }
+
+    /* Cleanup connection info */
+    freeCliConnInfo(config.conn_info);
+
+    /* Cleanup dataset context */
+    if (config.dataset_ctx) {
+        dataset_destroy((dataset_ctx_t*)config.dataset_ctx);
+        config.dataset_ctx = NULL;
+    }
+
+    /* Cleanup cluster tag mapping if it was initialized */
+    if (config.use_dataset) {
+        cleanupClusterTagMap(&cluster_tag_map);
+    }
+
+    /* Cleanup snapshot info */
+    if (last_search_info) {
+        freeClusterSnapshot(last_search_info);
+        last_search_info = NULL;
+    }
+    if (last_ftinfo) {
+        freeClusterSnapshot(last_ftinfo);
+        last_ftinfo = NULL;
+    }
+    if (last_info_all) {
+        freeClusterSnapshot(last_info_all);
+        last_info_all = NULL;
+    }
+
+    /* Cleanup lists and event loop */
+    if (config.clients) {
+        listRelease(config.clients);
+        config.clients = NULL;
+    }
+    if (config.paused_clients) {
+        listRelease(config.paused_clients);
+        config.paused_clients = NULL;
+    }
+    if (config.el) {
+        aeDeleteEventLoop(config.el);
+        config.el = NULL;
+    }
+
+    /* Cleanup config strings */
+    if (config.dataset_name) sdsfree(config.dataset_name);
+    if (config.search.name) sdsfree(config.search.name);
+    if (config.search.algorithm) sdsfree(config.search.algorithm);
+    if (config.search.prefix) sdsfree(config.search.prefix);
+    if (config.search.vector_field) sdsfree(config.search.vector_field);
+    if (config.search.tag_field) sdsfree(config.search.tag_field);
+    if (config.search.numeric_field) sdsfree(config.search.numeric_field);
+    if (config.search.metric) sdsfree(config.search.metric);
+    if (config.optimize_objective) sdsfree(config.optimize_objective);
+    if (config.optimize_csv_file) sdsfree(config.optimize_csv_file);
+    if (config.tests) sdsfree(config.tests);
+    if (config.input_dbnumstr) sdsfree(config.input_dbnumstr);
+
+    /* Cleanup runtime configuration */
+    if (config.runtime_config_ctx) {
+        freeRuntimeConfig(config.runtime_config_ctx);
+        config.runtime_config_ctx = NULL;
+    }
+
+    /* Cleanup SSL config */
+#ifdef USE_OPENSSL
+    if (config.sslconfig.sni) free(config.sslconfig.sni);
+    if (config.sslconfig.cacert) free(config.sslconfig.cacert);
+    if (config.sslconfig.cacertdir) free(config.sslconfig.cacertdir);
+    if (config.sslconfig.cert) free(config.sslconfig.cert);
+    if (config.sslconfig.key) free(config.sslconfig.key);
+    if (config.sslconfig.ciphers) free(config.sslconfig.ciphers);
+#ifdef TLS1_3_VERSION
+    if (config.sslconfig.ciphersuites) free(config.sslconfig.ciphersuites);
+#endif
+#endif
+
+    /* Cleanup optimize constraints */
+    if (config.optimize_constraints) {
+        for (int i = 0; i < config.num_optimize_constraints; i++) {
+            if (config.optimize_constraints[i]) sdsfree(config.optimize_constraints[i]);
+        }
+        free(config.optimize_constraints);
+        config.optimize_constraints = NULL;
+    }
+
+    /* Cleanup tag distributions */
+    if (config.search.curr_conf.tag_dists) {
+        for (int64_t i = 0; i < config.search.curr_conf.n_dists; i++) {
+            if (config.search.curr_conf.tag_dists[i].pattern) {
+                sdsfree(config.search.curr_conf.tag_dists[i].pattern);
+            }
+        }
+        zfree(config.search.curr_conf.tag_dists);
+        config.search.curr_conf.tag_dists = NULL;
+    }
+    if (config.search.curr_conf.tag_filter) {
+        sdsfree(config.search.curr_conf.tag_filter);
+        config.search.curr_conf.tag_filter = NULL;
+    }
+
+    /* Cleanup server config */
+    if (config.server_config) {
+        freeServerConfig(config.server_config);
+        config.server_config = NULL;
+    }
+
+    /* Cleanup base vector */
+    if (base_vector) {
+        zfree(base_vector);
+        base_vector = NULL;
+        base_vector_dim = 0;
+    }
+
+    /* Cleanup placeholders */
+    resetPlaceholders();
 }
 
 long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData) {
@@ -5113,6 +5561,19 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     int64_t requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     int64_t previous_requests_finished = atomic_load_explicit(&config.previous_requests_finished, memory_order_relaxed);
     long long current_tick = mstime();
+
+    /* Check for Ctrl+C interrupt - stop gracefully */
+    if (interrupted) {
+        static volatile sig_atomic_t message_printed = 0;
+        /* Print message only once across all threads */
+        if (!message_printed) {
+            message_printed = 1;
+            fprintf(stderr, "\n\nInterrupted by user (Ctrl+C). Stopping benchmark gracefully...\n");
+            fflush(stderr);
+        }
+        aeStop(eventLoop);
+        return AE_NOMORE;
+    }
 
     if (liveclients == 0 && requests_finished != config.requests) {
         fprintf(stderr, "All clients disconnected... aborting.\n");
@@ -5215,7 +5676,6 @@ int main(int argc, char **argv) {
     int64_t len;
     memset(&config, 0, sizeof(config));
     config.cluster_mode = -1; /* Unknown until detected */
-    client c;
 
     /* Configure libvalkey to use jemalloc allocators.
      * This ensures valkeyFormatCommand() and other libvalkey functions
@@ -5234,6 +5694,7 @@ int main(int argc, char **argv) {
     init_genrand64(ustime() ^ getpid());
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
+    signal(SIGINT, sigintHandler);
 
     config.ct = VALKEY_CONN_TCP;
     config.numclients = 50;
@@ -5269,10 +5730,10 @@ int main(int argc, char **argv) {
     config.cluster_mode = 0;
     config.rps = 0;
     config.balance_nodes = 0;
-    config.balance_cycle_ms = 1000;  /* Default: 1 second cycles */
-    config.balance_cycle_start_ns = 0;
+    config.balance_quota_step = 1000;  /* Default: 1000 requests per cycle */
+    config.balance_tolerance_pct = 10;  /* Default: 10% tolerance */
     config.node_request_counters = NULL;
-    config.requests_per_node_per_cycle = 0;
+    config.node_quota_remaining = NULL;
     config.read_from_replica = FROM_PRIMARY_ONLY;
     config.cluster_node_count = 0;
     config.cluster_nodes = NULL;
@@ -5303,59 +5764,88 @@ int main(int argc, char **argv) {
     config.no_save_config = 0;
 
     /* Load saved configuration if exists */
-    persisted_config_t saved_config;
-    memset(&saved_config, 0, sizeof(saved_config));
-    if (config_persist_load(&saved_config) == 0) {
+    g_saved_config = zcalloc(sizeof(persisted_config_t));
+    if (config_persist_load(g_saved_config) == 0) {
         /* Apply saved configuration as defaults */
-        if (saved_config.num_clients > 0) config.numclients = saved_config.num_clients;
-        if (saved_config.num_threads > 0) config.num_threads = saved_config.num_threads;
-        if (saved_config.pipeline > 0) config.pipeline = saved_config.pipeline;
-        if (saved_config.requests > 0) config.requests = saved_config.requests;
-        if (saved_config.keyspacelen > 0) config.keyspacelen = saved_config.keyspacelen;
-        if (saved_config.dbnum > 0) config.conn_info.input_dbnum = saved_config.dbnum;
-        if (saved_config.csv) config.csv = saved_config.csv;
-        if (saved_config.loop) config.loop = saved_config.loop;
-        if (saved_config.idlemode) config.idlemode = saved_config.idlemode;
-        if (saved_config.keepalive > 0) config.keepalive = saved_config.keepalive;
-        if (saved_config.precision > 0) config.precision = saved_config.precision;
-        if (saved_config.resp3) config.resp3 = saved_config.resp3;
+        if (g_saved_config->num_clients > 0) config.numclients = g_saved_config->num_clients;
+        if (g_saved_config->num_threads > 0) config.num_threads = g_saved_config->num_threads;
+        if (g_saved_config->pipeline > 0) config.pipeline = g_saved_config->pipeline;
+        if (g_saved_config->requests > 0) config.requests = g_saved_config->requests;
+        if (g_saved_config->keyspacelen > 0) config.keyspacelen = g_saved_config->keyspacelen;
+        if (g_saved_config->dbnum > 0) config.conn_info.input_dbnum = g_saved_config->dbnum;
+        if (g_saved_config->csv) config.csv = g_saved_config->csv;
+        if (g_saved_config->loop) config.loop = g_saved_config->loop;
+        if (g_saved_config->idlemode) config.idlemode = g_saved_config->idlemode;
+        if (g_saved_config->keepalive > 0) config.keepalive = g_saved_config->keepalive;
+        if (g_saved_config->precision > 0) config.precision = g_saved_config->precision;
+        if (g_saved_config->resp3) config.resp3 = g_saved_config->resp3;
 
         /* Apply search parameters */
-        if (saved_config.dataset) config.dataset_name = sdsnew(saved_config.dataset);
-        if (saved_config.search_name) config.search.name = sdsnew(saved_config.search_name);
-        if (saved_config.search_algorithm) config.search.algorithm = sdsnew(saved_config.search_algorithm);
-        if (saved_config.search_prefix) config.search.prefix = sdsnew(saved_config.search_prefix);
-        if (saved_config.vector_field) config.search.vector_field = sdsnew(saved_config.vector_field);
-        if (saved_config.vector_dim > 0) config.search.vector_dim = saved_config.vector_dim;
-        if (saved_config.tag_field) config.search.tag_field = sdsnew(saved_config.tag_field);
-        if (saved_config.numeric_field) config.search.numeric_field = sdsnew(saved_config.numeric_field);
-        if (saved_config.ef_search > 0) config.search.ef_search = saved_config.ef_search;
-        if (saved_config.ef_construction > 0) config.search.ef_construction = saved_config.ef_construction;
-        if (saved_config.m > 0) config.search.m = saved_config.m;
-        if (saved_config.k > 0) config.search.k = saved_config.k;
-        if (saved_config.metric) config.search.metric = sdsnew(saved_config.metric);
-        if (saved_config.nocontent) config.search.nocontent = saved_config.nocontent;
-        if (saved_config.localonly) config.search.localonly = saved_config.localonly;
-        if (saved_config.use_filtered_search) config.use_filtered_search = saved_config.use_filtered_search;
+        if (g_saved_config->dataset) {
+            if (config.dataset_name) sdsfree(config.dataset_name);
+            config.dataset_name = sdsnew(g_saved_config->dataset);
+        }
+        if (g_saved_config->search_name) {
+            if (config.search.name) sdsfree(config.search.name);
+            config.search.name = sdsnew(g_saved_config->search_name);
+        }
+        if (g_saved_config->search_algorithm) {
+            if (config.search.algorithm) sdsfree(config.search.algorithm);
+            config.search.algorithm = sdsnew(g_saved_config->search_algorithm);
+        }
+        if (g_saved_config->search_prefix) {
+            if (config.search.prefix) sdsfree(config.search.prefix);
+            config.search.prefix = sdsnew(g_saved_config->search_prefix);
+        }
+        if (g_saved_config->vector_field) {
+            if (config.search.vector_field) sdsfree(config.search.vector_field);
+            config.search.vector_field = sdsnew(g_saved_config->vector_field);
+        }
+        if (g_saved_config->vector_dim > 0) config.search.vector_dim = g_saved_config->vector_dim;
+        if (g_saved_config->tag_field) {
+            if (config.search.tag_field) sdsfree(config.search.tag_field);
+            config.search.tag_field = sdsnew(g_saved_config->tag_field);
+        }
+        if (g_saved_config->numeric_field) {
+            if (config.search.numeric_field) sdsfree(config.search.numeric_field);
+            config.search.numeric_field = sdsnew(g_saved_config->numeric_field);
+        }
+        if (g_saved_config->ef_search > 0) config.search.ef_search = g_saved_config->ef_search;
+        if (g_saved_config->ef_construction > 0) config.search.ef_construction = g_saved_config->ef_construction;
+        if (g_saved_config->m > 0) config.search.m = g_saved_config->m;
+        if (g_saved_config->k > 0) config.search.k = g_saved_config->k;
+        if (g_saved_config->metric) {
+            if (config.search.metric) sdsfree(config.search.metric);
+            config.search.metric = sdsnew(g_saved_config->metric);
+        }
+        // if (g_saved_config->nocontent) config.search.nocontent = g_saved_config->nocontent;
+        if (g_saved_config->localonly) config.search.localonly = g_saved_config->localonly;
+        if (g_saved_config->use_filtered_search) config.use_filtered_search = g_saved_config->use_filtered_search;
 
         /* Apply optimizer parameters */
-        if (saved_config.optimize_objective) config.optimize_objective = sdsnew(saved_config.optimize_objective);
-        if (saved_config.optimize_csv_file) config.optimize_csv_file = sdsnew(saved_config.optimize_csv_file);
-        if (saved_config.optimize_max_iterations > 0) config.optimize_max_iterations = saved_config.optimize_max_iterations;
-        if (saved_config.optimize_min_requests > 0) config.optimize_min_requests = saved_config.optimize_min_requests;
+        if (g_saved_config->optimize_objective) {
+            if (config.optimize_objective) sdsfree(config.optimize_objective);
+            config.optimize_objective = sdsnew(g_saved_config->optimize_objective);
+        }
+        if (g_saved_config->optimize_csv_file) {
+            if (config.optimize_csv_file) sdsfree(config.optimize_csv_file);
+            config.optimize_csv_file = sdsnew(g_saved_config->optimize_csv_file);
+        }
+        if (g_saved_config->optimize_max_iterations > 0) config.optimize_max_iterations = g_saved_config->optimize_max_iterations;
+        if (g_saved_config->optimize_min_requests > 0) config.optimize_min_requests = g_saved_config->optimize_min_requests;
 
         /* Apply auth parameters */
-        if (saved_config.auth) config.conn_info.auth = sdsnew(saved_config.auth);
-        if (saved_config.user) config.conn_info.user = sdsnew(saved_config.user);
+        if (g_saved_config->auth) config.conn_info.auth = sdsnew(g_saved_config->auth);
+        if (g_saved_config->user) config.conn_info.user = sdsnew(g_saved_config->user);
 
         /* Apply TLS parameters */
 #ifdef USE_OPENSSL
-        if (saved_config.tls_cert) config.sslconfig.cert = strdup(saved_config.tls_cert);
-        if (saved_config.tls_key) config.sslconfig.key = strdup(saved_config.tls_key);
-        if (saved_config.tls_cacert) config.sslconfig.cacert = strdup(saved_config.tls_cacert);
-        if (saved_config.tls_cacertdir) config.sslconfig.cacertdir = strdup(saved_config.tls_cacertdir);
-        if (saved_config.tls_skip_verify) config.sslconfig.skip_cert_verify = saved_config.tls_skip_verify;
-        if (saved_config.sni) config.sslconfig.sni = strdup(saved_config.sni);
+        if (g_saved_config->tls_cert) config.sslconfig.cert = strdup(g_saved_config->tls_cert);
+        if (g_saved_config->tls_key) config.sslconfig.key = strdup(g_saved_config->tls_key);
+        if (g_saved_config->tls_cacert) config.sslconfig.cacert = strdup(g_saved_config->tls_cacert);
+        if (g_saved_config->tls_cacertdir) config.sslconfig.cacertdir = strdup(g_saved_config->tls_cacertdir);
+        if (g_saved_config->tls_skip_verify) config.sslconfig.skip_cert_verify = g_saved_config->tls_skip_verify;
+        if (g_saved_config->sni) config.sslconfig.sni = strdup(g_saved_config->sni);
 #endif
     }
 
@@ -5424,7 +5914,11 @@ int main(int argc, char **argv) {
     }
 
     /* Clean up the saved config */
-    config_persist_free(&saved_config);
+    if (g_saved_config) {
+        config_persist_free(g_saved_config);
+        zfree(g_saved_config);
+        g_saved_config = NULL;
+    }
 
     tag = "";
 
@@ -5433,7 +5927,7 @@ int main(int argc, char **argv) {
         cliSecureInit();
     }
 #endif
-  
+
     /* Initialize base vector */
     initBaseVector(config.search.vector_dim);
     
@@ -5442,13 +5936,15 @@ int main(int argc, char **argv) {
         assert(0);
     }
     config.engine_type = getEngineType(config.conn_info.hostip, config.conn_info.hostport, config.ct);
+    if (config.engine_type == ENGINE_TYPE_MEMORYDB)
+        config.search.localonly = 0;
     valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
     /* Detect cluster mode (CME vs CMD) */
     config.cluster_mode = isClusterModeEnabled(ctx) > 0; /* Unknown by default */
     valkeyFree(ctx);
     if (config.cluster_mode) {
-        // We only include the slot placeholder {tag} if cluster mode is enabled
-        tag = "{tag}";
+        // We only include the slot placeholder {clt} if cluster mode is enabled
+        tag = "{clt}";
         /* Fetch cluster configuration. */
         if (!fetchClusterConfiguration() || !config.cluster_nodes) {
             if (config.ct != VALKEY_CONN_UNIX) {
@@ -5540,13 +6036,11 @@ int main(int argc, char **argv) {
 
     if (config.idlemode) {
         printf("Creating %ld idle connections and waiting forever (Ctrl+C when done)\n", config.numclients);
-        int64_t thread_id = -1, use_threads = (config.num_threads > 0);
+        int64_t use_threads = (config.num_threads > 0);
         if (use_threads) {
-            thread_id = 0;
             initBenchmarkThreads();
         }
-        c = createClient("", 0, 1, NULL, thread_id); /* will never receive a reply */
-        createMissingClients(c);
+        createMissingClients("", 0, 1);
         if (use_threads)
             startBenchmarkThreads();
         else
@@ -5554,20 +6048,6 @@ int main(int argc, char **argv) {
         /* and will wait for every */
     }
     
-    /* Measure baseline network latency (enabled by default unless --no-baseline) */
-    if (!config.no_baseline) {
-        measureBaselineLatency();
-    }
-    
-    if (config.csv) {
-        if (!config.no_baseline && baseline_latency.measured) {
-            printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
-                   "latency_ms\",\"max_latency_ms\",\"baseline_avg_ms\",\"baseline_p50_ms\",\"baseline_p95_ms\",\"baseline_p99_ms\"\n");
-        } else {
-            printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
-                   "latency_ms\",\"max_latency_ms\"\n");
-        }
-    }
     /* Run benchmark with command in the remainder of the arguments. */
     if (argc) {
         sds title = sdsnew(argv[0]);
@@ -5659,8 +6139,7 @@ int main(int argc, char **argv) {
             if (!config.dataset_ctx) {
                 fprintf(stderr, "Failed to initialize dataset: %s\n", config.dataset_name);
                 exit(1);
-            }
-
+            }            
             /* Store metadata */
             config.dataset_num_vectors = info.num_vectors;
             config.dataset_num_queries = info.num_queries;
@@ -5682,14 +6161,11 @@ int main(int argc, char **argv) {
             /* Store distance metric */
             config.search.metric = sdsnewlen(info.distance_metric, strlen(info.distance_metric));
 
-
-
             /* Initialize recall tracking */
             initRecallStats();
 
             /* Initialize cluster tag mapping */
             initClusterTagMap(&cluster_tag_map, info.num_vectors * 2); /* initial capacity */
-
 
             /* Override vector dimension from dataset */
             if (config.search.vector_dim != (int64_t)info.dim) {
@@ -5705,7 +6181,6 @@ int main(int argc, char **argv) {
             printf("✓ Dataset loaded: %lu vectors, %lu queries, %u dims, %u neighbors\n",
                 info.num_vectors, info.num_queries, info.dim, info.num_neighbors);
         }
-
 
         if (config.cluster_mode && config.cluster_primary_nodes && config.cluster_primary_node_count > 0) {
             valkeyContext *ctx = config.cluster_primary_nodes[0]->ctx;
@@ -5723,23 +6198,15 @@ int main(int argc, char **argv) {
         } else if (config.cluster_mode == 0) {
             cluster_mode_str = "CMD (Cluster Mode Disabled)";
         }
-        
+        // createSearchHsetTemplate(&cmd);
         printf("Using search indexes for the benchmark. %s - %s\n", 
                config.engine_type == ENGINE_TYPE_MEMORYDB ? "MemoryDB" : config.engine_type == ENGINE_TYPE_ELASTICACHE_VALKEY ? "EC Valkey" : "OSS",
                cluster_mode_str);
-       
-        // int64_t num_indexes = 1;
-        // char* index_names[2] = {config.search.name, NULL};
-        // sds flat_index = sdsnew(config.search.name);        
-        // flat_index = sdscat(flat_index, "_flat");               
-        // const char* index_names[2] = {config.search.name, flat_index};
-        // int64_t num_indexes = 2;
 
         createDefaultSearchIndexes();
         sleep(2); /* wait a bit before checking index status */
         waitForIndexBackfillComplete(config.engine_type, config.selected_node_count, config.selected_nodes, config.ct, (const char**)&config.search.name, 1);
-        // wait for flat indexes
-        // sdsfree(flat_index);
+
         long long search_memory = 0;
         long long search_reclaimable = 0;
         long long search_total_docs = 0;
@@ -5765,8 +6232,7 @@ int main(int argc, char **argv) {
                 printf("Initial mapping built. New insertions will update mapping in real-time.\n");
             }        
         }
-    }
-    
+    }    
     /* Apply runtime configuration if specified */
     if (config.runtime_config_file) {
         config.runtime_config_ctx = loadRuntimeConfig(config.runtime_config_file);
@@ -5783,7 +6249,16 @@ int main(int argc, char **argv) {
             }
         }
     }
-    
+    if (config.csv) {
+        if (!config.no_baseline) {
+            printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
+                   "latency_ms\",\"max_latency_ms\",\"baseline_avg_ms\",\"baseline_p50_ms\",\"baseline_p95_ms\",\"baseline_p99_ms\"\n");
+        } else {
+            printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
+                   "latency_ms\",\"max_latency_ms\"\n");
+        }
+    }
+
     /* Initialize optimizer if enabled */
     if (config.optimize_enabled) {
         if (!config.optimize_objective) {
@@ -5807,10 +6282,10 @@ int main(int argc, char **argv) {
         int64_t client_min, client_max, thread_min, thread_max;
         int64_t ef_search_min, ef_search_max, pipeline_min, pipeline_max;
         
-        parseOptimizeRange(config.optimize_client_range, &client_min, &client_max, 1, 1500);
+        parseOptimizeRange(config.optimize_client_range, &client_min, &client_max, 1, 800);
         parseOptimizeRange(config.optimize_thread_range, &thread_min, &thread_max, 0, 16);
         parseOptimizeRange(config.optimize_ef_search_range, &ef_search_min, &ef_search_max, 20, 500);
-        parseOptimizeRange(config.optimize_pipeline_range, &pipeline_min, &pipeline_max, 1, 1000);
+        parseOptimizeRange(config.optimize_pipeline_range, &pipeline_min, &pipeline_max, 1, 100);
         
         optimizer_add_param_grouped(config.optimizer, "clients", client_min, client_max, 5, config.numclients, PARAM_GROUP_THROUGHPUT);
         optimizer_add_param_grouped(config.optimizer, "threads", thread_min, thread_max, 1, config.num_threads, PARAM_GROUP_THROUGHPUT);
@@ -5830,11 +6305,6 @@ int main(int argc, char **argv) {
         
         /* Set optimization objective */
         parseOptimizerObjective(config.optimizer, config.optimize_objective);
-        
-        /* Measure baseline network latency (enabled by default unless --no-baseline) */
-        if (!config.no_baseline) {
-            measureBaselineLatency();
-        }
         
         /* Open CSV output file if specified */
         FILE *csv_file = NULL;
@@ -5872,7 +6342,7 @@ int main(int argc, char **argv) {
         config.keyspacelen = keyspacelen_before;
         // config.optimize_max_iterations = 10;
         /* Optimization loop */
-        while (opt_status != STATUS_CONVERGED && iteration < config.optimize_max_iterations) {
+        while (opt_status != STATUS_CONVERGED && iteration < config.optimize_max_iterations && !interrupted) {
             iteration++;
             
             /* Get current configuration from optimizer */
@@ -5891,8 +6361,7 @@ int main(int argc, char **argv) {
             printf("\n--- Iteration %ld ---\n", iteration);
             printf("Config: clients=%ld threads=%ld pipeline=%ld ef_search=%ld requests=%ld\n",
                    config.numclients, config.num_threads, config.pipeline, config.search.ef_search, config.requests);
-            
-            
+                        
             benchmark("VEC-QUERY (optimizing)", cmd_opt, len_opt);
             
             /* Collect metrics */
@@ -5950,8 +6419,7 @@ int main(int argc, char **argv) {
                 config.num_threads = best->param_values[1];
                 // config.pipeline = best->param_values[2];
                 config.search.ef_search = best->param_values[2];
-                
-                
+                                
                 /* Run final benchmark with full request count */
                 if (config.use_search && test_is_selected("vec-query")) {
                     size_t keyspacelen_before = config.keyspacelen;
@@ -5963,8 +6431,7 @@ int main(int argc, char **argv) {
                     benchmark("VEC-QUERY (final)", cmd_final, len_final);
                     zfree(cmd_final);
                     config.keyspacelen = keyspacelen_before;
-                }
-                
+                }                
                 /* Print final benchmark results */
                 double final_metrics[METRIC_COUNT];
                 collectOptimizerMetrics(final_metrics);
@@ -5977,8 +6444,7 @@ int main(int argc, char **argv) {
         }
         
         if (csv_file) fclose(csv_file);
-        optimizer_destroy(config.optimizer);
-        
+        optimizer_destroy(config.optimizer);        
         /* Exit after optimization - don't run normal benchmarks */
         return 0;
     }
@@ -6073,9 +6539,6 @@ int main(int argc, char **argv) {
                 benchmark("VEC-LOAD", cmd, len);
                 zfree(cmd);
                 /* wait for index ingestion to complete*/
-                // sds flat_index = sdsnew(config.search.name);
-                // flat_index = sdscat(flat_index, "_flat");               
-                // const char* index_names[2] = {config.search.name, flat_index};
                 sleep(2); /* wait a bit before checking index status */
                 waitForIndexBackfillComplete(config.engine_type, config.selected_node_count, config.selected_nodes, config.ct, (const char**)&config.search.name, 1);
                 /* Index ingestion is done */
@@ -6272,13 +6735,9 @@ int main(int argc, char **argv) {
         }
 
         if (!config.csv) printf("\n");
-    } while (config.loop);
+    } while (config.loop && !interrupted);
 
     zfree(data);
-    freeCliConnInfo(config.conn_info);
-    if (config.server_config != NULL) freeServerConfig(config.server_config);
-    if (base_vector != NULL) zfree(base_vector);
-    resetPlaceholders();
     
     /* Restore runtime configuration if requested */
     if (config.restore_runtime_config && config.runtime_config_ctx) {
@@ -6295,19 +6754,11 @@ int main(int argc, char **argv) {
         }
     }
     
-    /* Free runtime configuration context */
-    if (config.runtime_config_ctx) {
-        freeRuntimeConfig(config.runtime_config_ctx);
-        config.runtime_config_ctx = NULL;
-    }
-    
     /* Print dataset recall statistics if dataset mode was used */
     printDatasetRecallStats();
 
-    /* Cleanup cluster tag mapping if it was initialized */
-    if (config.use_dataset) {
-        cleanupClusterTagMap(&cluster_tag_map);
-    }
+    /* Cleanup all resources */
+    cleanupConfig();
 
     return 0;
 }

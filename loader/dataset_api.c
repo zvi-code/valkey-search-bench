@@ -392,12 +392,48 @@ dataset_ctx_t* dataset_init(const char *dataset_name, dataset_info_t *info) {
             }
         }
     }
-    printf("Dataset loaded: %s (%.2f GB, %lu vecs, %u dims, dtype %s, distance %s, max queries per neighbor %d)\n",
-            header->dataset_name, 
-            (double)st.st_size / (1024*1024*1024),
-            header->num_vectors, header->dim, 
-            dtype_names[header->dtype], distance_metric_names[header->distance_metric], 
-            max_queries_per_neighbor);
+    
+    printf("\n=== Dataset Loaded ===\n");
+    printf("  Name: %s\n", header->dataset_name);
+    printf("  File size: %.2f GB\n", (double)st.st_size / (1024*1024*1024));
+    printf("  Vectors: %lu\n", (unsigned long)header->num_vectors);
+    printf("  Queries: %lu\n", (unsigned long)header->num_queries);
+    printf("  Dimensions: %u\n", header->dim);
+    printf("  Neighbors (k): %u\n", header->num_neighbors);
+    printf("  Distance metric: %s\n", distance_metric_names[header->distance_metric]);
+    printf("  Data type: %s\n", dtype_names[header->dtype]);
+    printf("  Max queries per neighbor: %d\n", max_queries_per_neighbor);
+    
+    if (header->has_metadata && ctx->vocabulary) {
+        printf("  Metadata: Available\n");
+        printf("    Vocabulary size: %u tags\n", header->vocab_size);
+        if (ctx->vector_metadata) {
+            printf("    Vector tags: %u (%.1f avg per vector)\n", 
+                   ctx->vector_metadata->nnz,
+                   (float)ctx->vector_metadata->nnz / header->num_vectors);
+        }
+        if (ctx->query_metadata) {
+            printf("    Query predicates: %u (%.1f avg per query)\n", 
+                   ctx->query_metadata->nnz,
+                   (float)ctx->query_metadata->nnz / header->num_queries);
+        }
+        
+        /* Show sample tags */
+        if (header->vocab_size > 0) {
+            printf("    Sample tags: ");
+            uint32_t sample_count = (header->vocab_size < 10) ? header->vocab_size : 10;
+            for (uint32_t i = 0; i < sample_count; i++) {
+                printf("%s%s", i > 0 ? ", " : "", ctx->vocabulary->words[i]);
+            }
+            if (header->vocab_size > 10) {
+                printf(" ... (%u more)", header->vocab_size - 10);
+            }
+            printf("\n");
+        }
+    } else {
+        printf("  Metadata: Not available\n");
+    }
+    printf("======================\n\n");
 
     return ctx;
 }

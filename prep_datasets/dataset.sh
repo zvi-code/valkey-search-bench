@@ -26,6 +26,17 @@ set -eo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANAGER="${SCRIPT_DIR}/dataset_manager.py"
 
+# Check for virtual environment and set Python command
+VENV_DIR="${SCRIPT_DIR}/../venv"
+if [ -d "$VENV_DIR" ] && [ -f "$VENV_DIR/bin/python3" ]; then
+    PYTHON_CMD="$VENV_DIR/bin/python3"
+else
+    PYTHON_CMD="python3"
+    echo -e "\033[1;33m⚠ Warning: Virtual environment not found. Using system python3.${NC}"
+    echo -e "\033[1;33m  Run ./prereq-vectordbbench.sh first to set up the environment.${NC}"
+    echo ""
+fi
+
 # Colors
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -80,9 +91,9 @@ case "$COMMAND" in
     list)
         # List datasets with optional filter
         if [ -n "$1" ]; then
-            python3 "$MANAGER" list --filter "$1"
+            "$PYTHON_CMD" "$MANAGER" list --filter "$1"
         else
-            python3 "$MANAGER" list
+            "$PYTHON_CMD" "$MANAGER" list
         fi
         ;;
     
@@ -93,7 +104,7 @@ case "$COMMAND" in
             echo "Example: $0 get sift-128"
             exit 1
         fi
-        python3 "$MANAGER" get "$@"
+        "$PYTHON_CMD" "$MANAGER" get "$@"
         ;;
     
     verify)
@@ -111,14 +122,14 @@ case "$COMMAND" in
                 continue
             fi
             
-            python3 "$MANAGER" verify "$FILE" || FAILED=1
+            "$PYTHON_CMD" "$MANAGER" verify "$FILE" || FAILED=1
         done
         exit $FAILED
         ;;
     
     convert)
         # Custom conversion
-        python3 "$MANAGER" convert "$@"
+        "$PYTHON_CMD" "$MANAGER" convert "$@"
         ;;
     
     clean)

@@ -6,7 +6,11 @@ set_directory_properties(PROPERTIES CLEAN_NO_CUSTOM 1)
 # Add include directories
 include_directories("${CMAKE_SOURCE_DIR}/loader")
 include_directories("${CMAKE_SOURCE_DIR}/loader/core")
-include_directories("${CMAKE_BINARY_DIR}/jemalloc-build/include")
+
+# Only include jemalloc paths if using jemalloc
+if (USE_JEMALLOC)
+    include_directories("${CMAKE_BINARY_DIR}/jemalloc-build/include")
+endif()
 
 # Set up compiler flags
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${VALKEY_SERVER_CFLAGS}")
@@ -15,17 +19,21 @@ message(STATUS "CFLAGS: ${CMAKE_C_FLAGS}")
 # Get linker options
 get_valkey_server_linker_option(VALKEY_SERVER_LDFLAGS)
 
-# Add jemalloc static library to linker flags
-set(VALKEY_SERVER_LDFLAGS "${VALKEY_SERVER_LDFLAGS} ${CMAKE_BINARY_DIR}/jemalloc-build/lib/libjemalloc.a")
+# Add jemalloc static library to linker flags only if using jemalloc
+if (USE_JEMALLOC)
+    set(VALKEY_SERVER_LDFLAGS "${VALKEY_SERVER_LDFLAGS} ${CMAKE_BINARY_DIR}/jemalloc-build/lib/libjemalloc.a")
+endif()
 
-# Target: valkey-benchmark with jemalloc
+# Target: valkey-benchmark
 list(APPEND BENCH_LIBS "fpconv")
 list(APPEND BENCH_LIBS "hdr_histogram")
 valkey_build_and_install_bin(valkey-benchmark "${VALKEY_BENCHMARK_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${BENCH_LIBS}"
                              "redis-benchmark")
 
-# Add USE_JEMALLOC compile definition
-target_compile_definitions(valkey-benchmark PRIVATE USE_JEMALLOC)
+# Add USE_JEMALLOC compile definition only if using jemalloc
+if (USE_JEMALLOC)
+    target_compile_definitions(valkey-benchmark PRIVATE USE_JEMALLOC)
+endif()
 
 # NOTE: Removed unused code generation target dependencies:
 # - generate_commands_def (commands.def not used)

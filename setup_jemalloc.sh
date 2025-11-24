@@ -23,7 +23,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${SCRIPT_DIR}/build"
+BUILD_DIR="./"
 JEMALLOC_TARGET="${BUILD_DIR}/jemalloc-build"
 
 # Colors for output

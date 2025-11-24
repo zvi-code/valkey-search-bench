@@ -876,22 +876,23 @@ EngineType getEngineType(const char *ip_or_path, int port, enum valkeyConnection
     }
     // get the string value of line starts with os:
     char *os_line = strstr(reply->str, "os:");
+    EngineType result;
     if (os_line) {
         if (strstr(os_line, "Amazon MemoryDB") != NULL) {
-            freeReplyObject(reply);
-            return ENGINE_TYPE_MEMORYDB; /* It's a MemoryDB node */
+            result = ENGINE_TYPE_MEMORYDB; /* It's a MemoryDB node */
         } else if (strstr(os_line, "Amazon ElastiCache") != NULL) {
-            freeReplyObject(reply);
-            return ENGINE_TYPE_ELASTICACHE_VALKEY; /* It's a Redis node */
+            result = ENGINE_TYPE_ELASTICACHE_VALKEY; /* It's a Redis node */
         } else {
-            freeReplyObject(reply);
-            return ENGINE_TYPE_OSS_VALKEY; /* Unknown engine */
+            result = ENGINE_TYPE_OSS_VALKEY; /* Unknown engine */
         }
-    } 
-    printf("Error: 'os' field not found in INFO output on node %s.\n", ip_or_path);
+    } else {
+        printf("Error: 'os' field not found in INFO output on node %s.\n", ip_or_path);
+        result = ENGINE_TYPE_UNKNOWN; /* 'os' field not found */
+    }
+    
     freeReplyObject(reply);
     valkeyFree(ctx);
-    return ENGINE_TYPE_UNKNOWN; /* 'os' field not found */
+    return result;
 }
 
 /* Check if the server is running in Cluster Mode Enabled (CME) 
@@ -1242,6 +1243,86 @@ static sds convertMemDBFtInfoToLines(valkeyReply *reply, const char *prefix) {
     }
     
     return lines;
+}
+
+/**
+ * Extract the key prefix from FT.INFO response
+ * 
+ * For ElastiCache: looks for "index_definition.prefixes" in the response
+ * For MemoryDB: looks for "key_prefixes" in the response
+ * 
+ * Returns: allocated sds with the first prefix, or NULL if not found
+ */
+sds extractPrefixFromFtInfo(valkeyReply *reply, EngineType engine_type) {
+    if (!reply || reply->type != VALKEY_REPLY_ARRAY) {
+        return NULL;
+    }
+    
+    if (engine_type == ENGINE_TYPE_MEMORYDB) {
+        /* MemoryDB format: key_prefixes is a direct key with array value */
+        for (size_t i = 0; i < reply->elements; i += 2) {
+            if (i + 1 >= reply->elements) break;
+            
+            valkeyReply *key_elem = reply->element[i];
+            valkeyReply *val_elem = reply->element[i + 1];
+            
+            if (!key_elem || !val_elem) continue;
+            
+            if ((key_elem->type == VALKEY_REPLY_STRING || key_elem->type == VALKEY_REPLY_STATUS) &&
+                strcmp(key_elem->str, "key_prefixes") == 0) {
+                
+                /* Value should be an array of prefixes */
+                if (val_elem->type == VALKEY_REPLY_ARRAY && val_elem->elements > 0) {
+                    valkeyReply *first_prefix = val_elem->element[0];
+                    if (first_prefix && (first_prefix->type == VALKEY_REPLY_STRING || 
+                                        first_prefix->type == VALKEY_REPLY_STATUS)) {
+                        return sdsnew(first_prefix->str);
+                    }
+                }
+            }
+        }
+    } else {
+        /* ElastiCache format: nested in index_definition */
+        for (size_t i = 0; i < reply->elements; i += 2) {
+            if (i + 1 >= reply->elements) break;
+            
+            valkeyReply *key_elem = reply->element[i];
+            valkeyReply *val_elem = reply->element[i + 1];
+            
+            if (!key_elem || !val_elem) continue;
+            
+            if ((key_elem->type == VALKEY_REPLY_STRING || key_elem->type == VALKEY_REPLY_STATUS) &&
+                strcmp(key_elem->str, "index_definition") == 0) {
+                
+                /* index_definition is an array of key-value pairs */
+                if (val_elem->type == VALKEY_REPLY_ARRAY) {
+                    for (size_t j = 0; j < val_elem->elements; j += 2) {
+                        if (j + 1 >= val_elem->elements) break;
+                        
+                        valkeyReply *def_key = val_elem->element[j];
+                        valkeyReply *def_val = val_elem->element[j + 1];
+                        
+                        if (!def_key || !def_val) continue;
+                        
+                        if ((def_key->type == VALKEY_REPLY_STRING || def_key->type == VALKEY_REPLY_STATUS) &&
+                            strcmp(def_key->str, "prefixes") == 0) {
+                            
+                            /* prefixes is an array */
+                            if (def_val->type == VALKEY_REPLY_ARRAY && def_val->elements > 0) {
+                                valkeyReply *first_prefix = def_val->element[0];
+                                if (first_prefix && (first_prefix->type == VALKEY_REPLY_STRING ||
+                                                    first_prefix->type == VALKEY_REPLY_STATUS)) {
+                                    return sdsnew(first_prefix->str);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    return NULL;
 }
 
 int getNodeProgressEC(clusterNode *node, enum valkeyConnectionType ct, const char *index_name, long long int* node_docs, int* progress_percent) {
@@ -1774,14 +1855,12 @@ clusterSnapshot* createClusterSnapshot(const char *command,
                         }
                     }
                 }
-                line = strtok_r(NULL, "\n", &saveptr);
-            }
-            
-            zfree(lines_copy);
-            sdsfree(lines);
+            line = strtok_r(NULL, "\n", &saveptr);
         }
         
-        freeReplyObject(reply);
+        sdsfree(lines_copy);
+        sdsfree(lines);
+    }        freeReplyObject(reply);
         valkeyFree(ctx);
     }
     
@@ -2296,15 +2375,15 @@ clusterSnapshot* getSearchInfo(int cluster_node_count, clusterNode **cluster_nod
     assert(info_snapshot);    
     for (int i = 0; i < info_snapshot->num_fields; i++) {
         if (info_snapshot->fields[i].valid) {
-            if (sdscmp(info_snapshot->fields[i].field_name, "search_used_memory_bytes") == 0) {
+            if (strcmp(info_snapshot->fields[i].field_name, "search_used_memory_bytes") == 0) {
                 *search_memory = info_snapshot->fields[i].value;
-            } else if (sdscmp(info_snapshot->fields[i].field_name, "search_index_reclaimable_memory") == 0) {
+            } else if (strcmp(info_snapshot->fields[i].field_name, "search_index_reclaimable_memory") == 0) {
                 *search_reclaimable = info_snapshot->fields[i].value;
-            } else if (sdscmp(info_snapshot->fields[i].field_name, "search_total_indexed_documents") == 0) {
+            } else if (strcmp(info_snapshot->fields[i].field_name, "search_total_indexed_documents") == 0) {
                 *search_total_docs = info_snapshot->fields[i].value;
-            } else if (sdscmp(info_snapshot->fields[i].field_name, "search_ingest_field_vector") == 0) {
+            } else if (strcmp(info_snapshot->fields[i].field_name, "search_ingest_field_vector") == 0) {
                 *search_ingest_field_vector = info_snapshot->fields[i].value;
-            } else if (sdscmp(info_snapshot->fields[i].field_name, "search_background_indexing_status") == 0) {
+            } else if (strcmp(info_snapshot->fields[i].field_name, "search_background_indexing_status") == 0) {
                 *search_background_indexing_status = info_snapshot->fields[i].value;
             }
             // printf("> %s:%lld\n", info_snapshot->fields[i].field_name, info_snapshot->fields[i].value);

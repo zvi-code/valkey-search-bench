@@ -169,6 +169,10 @@ int buildVectorIdMappings(int64_t is_cluster_mode_enabled, const char *prefix,
 void cleanupClusterTagMap(clusterTagMap *tag_map) {
     if (!tag_map) return;
 
+    if (tag_map->prefix) {
+        zfree(tag_map->prefix);
+        tag_map->prefix = NULL;
+    }
     if (tag_map->mappings) {
         zfree(tag_map->mappings);
         tag_map->mappings = NULL;

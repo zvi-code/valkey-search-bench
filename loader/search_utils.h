@@ -152,6 +152,9 @@ void waitForIndexBackfillComplete(EngineType engine_type, int cluster_node_count
 EngineType getEngineType(const char *ip_or_path, int port, enum valkeyConnectionType ct);
 int isClusterModeEnabled(valkeyContext *ctx);
 
+/* Extract prefix from FT.INFO response */
+sds extractPrefixFromFtInfo(valkeyReply *reply, EngineType engine_type);
+
 /* Runtime Configuration Management */
 typedef struct runtimeConfigEntry {
     char *key;
