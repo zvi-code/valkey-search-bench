@@ -40,10 +40,34 @@ from typing import Optional, Dict, List, Tuple
 VENV_PYTHON = Path(__file__).parent.parent / "venv" / "bin" / "python3"
 PYTHON_CMD = str(VENV_PYTHON) if VENV_PYTHON.exists() else sys.executable
 
-# Paths
-DATASETS_DIR = Path("/mnt/data/datasets")
-BUILD_DIR = Path("/mnt/data/build-datasets")
+# Paths - configurable via environment variables
+# Falls back to local project directories if /mnt/data is not available
 PROJECT_ROOT = Path(__file__).parent.parent.absolute()
+
+def _get_default_datasets_dir() -> Path:
+    """Get default datasets directory, preferring /mnt/data if writable."""
+    mnt_path = Path("/mnt/data/datasets")
+    if mnt_path.parent.exists():
+        try:
+            mnt_path.mkdir(parents=True, exist_ok=True)
+            return mnt_path
+        except PermissionError:
+            pass
+    return PROJECT_ROOT / "datasets" / "raw"
+
+def _get_default_build_dir() -> Path:
+    """Get default build directory, preferring /mnt/data if writable."""
+    mnt_path = Path("/mnt/data/build-datasets")
+    if mnt_path.parent.exists():
+        try:
+            mnt_path.mkdir(parents=True, exist_ok=True)
+            return mnt_path
+        except PermissionError:
+            pass
+    return PROJECT_ROOT / "datasets"
+
+DATASETS_DIR = Path(os.environ.get("DATASET_PATH", "")) if os.environ.get("DATASET_PATH") else _get_default_datasets_dir()
+BUILD_DIR = Path(os.environ.get("BUILD_DATASET_PATH", "")) if os.environ.get("BUILD_DATASET_PATH") else _get_default_build_dir()
 CONVERSION_DIR = PROJECT_ROOT / "prep_datasets"
 UTILS_DIR = PROJECT_ROOT / "utils" / "datasets"
 
@@ -448,6 +472,11 @@ def create_dataset_symlink(dataset_name: str):
     
     # Symlink in local datasets directory
     symlink_path = local_datasets_dir / f"{dataset_name}.bin"
+    
+    # Skip symlink if source and target are the same path
+    if source_bin.resolve() == symlink_path.resolve() or source_bin == symlink_path:
+        # File is already in the right place, no symlink needed
+        return True
     
     # Remove existing symlink if it exists
     if symlink_path.exists() or symlink_path.is_symlink():

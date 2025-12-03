@@ -1038,7 +1038,6 @@ static float checkNeighbors(uint64_t query_ix,
 
 static void printDatasetRecallStats(void) {
     if (!config.use_dataset || dataset_recall_stats.total_queries == 0) {
-        assert(0);
         return;
     }
 

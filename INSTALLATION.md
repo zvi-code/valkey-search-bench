@@ -399,8 +399,9 @@ Solutions:
 Optional environment variables for customization:
 
 ```bash
-# Dataset search paths
-export DATASET_PATH=/mnt/data/build-datasets
+# Dataset directories (automatically falls back to project-local directories if not set)
+export DATASET_PATH=/mnt/data/datasets           # Raw downloads and HDF5 cache
+export BUILD_DATASET_PATH=/mnt/data/build-datasets  # Final binary datasets
 
 # Python environment activation
 export VENV_PATH=/mnt/data/vectordb-bench-env
@@ -408,6 +409,8 @@ export VENV_PATH=/mnt/data/vectordb-bench-env
 # Add to ~/.bashrc for persistence
 echo 'source /mnt/data/vectordb-bench-env/bin/activate' >> ~/.bashrc
 ```
+
+**Note**: If `/mnt/data` is not available or not writable, the dataset manager will automatically use local directories within the project (`datasets/raw/` and `datasets/`).
 
 ## ARM64-Specific Tips
 
