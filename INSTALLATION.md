@@ -20,7 +20,29 @@ cd valkey-search-bench
 
 > **Note**: The `--recursive` flag fetches required submodules. If you already cloned without it, run: `git submodule update --init --recursive`
 
-### Step 3: Build valkey-benchmark
+### Step 3: Configure Storage (Important for Large Datasets)
+
+Vector datasets can be very large (10GB-40GB+). **Do not use your boot volume** for storing datasets.
+
+**For small datasets (< 5GB):** The default `./datasets/` directory is fine.
+
+**For medium/large datasets:** Mount a dedicated storage volume:
+
+```bash
+# Example: Mount an additional EBS or NVMe volume
+sudo mkdir -p /mnt/data
+sudo mount /dev/nvme1n1 /mnt/data  # Or your volume device
+sudo chown -R $USER:$USER /mnt/data
+
+# Configure dataset paths
+export DATASET_PATH=/mnt/data/datasets
+export BUILD_DATASET_PATH=/mnt/data/build-datasets
+mkdir -p $DATASET_PATH $BUILD_DATASET_PATH
+```
+
+> **Tip**: Add the exports to `~/.bashrc` for persistence. See [Appendix B](#appendix-b-nvme-storage-setup-large-datasets) for detailed NVMe setup.
+
+### Step 4: Build valkey-benchmark
 
 ```bash
 mkdir -p build && cd build
@@ -28,13 +50,13 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
 make -j$(nproc)
 ```
 
-### Step 4: Verify Build
+### Step 5: Verify Build
 
 ```bash
 ./bin/valkey-benchmark --version
 ```
 
-### Step 5: Setup Python Environment
+### Step 6: Setup Python Environment
 
 ```bash
 cd ..  # Back to project root
@@ -44,13 +66,13 @@ pip install --upgrade pip
 pip install vectordb-bench==1.0.10 h5py pandas pyarrow numpy
 ```
 
-### Step 6: Download a Dataset
+### Step 7: Download a Dataset
 
 ```bash
 ./prep_datasets/dataset.sh get mnist
 ```
 
-### Step 7: Run a Test Benchmark
+### Step 8: Run a Test Benchmark
 
 ```bash
 # Test connectivity (replace with your server address)
