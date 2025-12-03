@@ -282,6 +282,13 @@ endif ()
 set(VALKEY_SRC_DIR "${CMAKE_SOURCE_DIR}/deps/valkey/src")
 set(VALKEY_DEPS_DIR "${CMAKE_SOURCE_DIR}/deps/valkey/deps")
 
+# Build jemalloc FIRST if needed (must be done before other deps)
+# jemalloc uses configure/make, not cmake subdirectory, so we use its CMakeLists.txt wrapper
+if (USE_JEMALLOC)
+    add_subdirectory("${VALKEY_DEPS_DIR}/jemalloc" "${CMAKE_BINARY_DIR}/valkey-deps/jemalloc")
+    include_directories("${CMAKE_BINARY_DIR}/jemalloc-build/include")
+endif ()
+
 # Include directories for deps we use directly (not VALKEY_SRC_DIR!)
 # NOTE: Do NOT add VALKEY_SRC_DIR to global includes - it would pollute
 # libvalkey with Valkey server's cluster.h instead of libvalkey's own
@@ -300,16 +307,11 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries")
 set(DISABLE_TESTS ON CACHE BOOL "If tests should be compiled or not")
 
 # Build dependencies directly (not using deps/CMakeLists.txt which has wrong paths)
-# We only need: libvalkey, linenoise, fpconv, hdr_histogram, and optionally jemalloc
+# We only need: libvalkey, linenoise, fpconv, hdr_histogram
 add_subdirectory("${VALKEY_DEPS_DIR}/libvalkey" "${CMAKE_BINARY_DIR}/valkey-deps/libvalkey")
 add_subdirectory("${VALKEY_DEPS_DIR}/linenoise" "${CMAKE_BINARY_DIR}/valkey-deps/linenoise")
 add_subdirectory("${VALKEY_DEPS_DIR}/fpconv" "${CMAKE_BINARY_DIR}/valkey-deps/fpconv")
 add_subdirectory("${VALKEY_DEPS_DIR}/hdr_histogram" "${CMAKE_BINARY_DIR}/valkey-deps/hdr_histogram")
-
-# jemalloc include path
-if (USE_JEMALLOC)
-    include_directories("${CMAKE_BINARY_DIR}/jemalloc-build/include")
-endif ()
 
 # Common compiler flags
 add_valkey_server_compiler_options("-pedantic")

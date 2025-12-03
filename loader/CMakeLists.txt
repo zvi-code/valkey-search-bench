@@ -13,11 +13,6 @@ set(VALKEY_SRC ${CMAKE_SOURCE_DIR}/deps/valkey/src)
 include_directories("${CMAKE_SOURCE_DIR}/loader")
 include_directories("${VALKEY_SRC}")
 
-# Only include jemalloc paths if using jemalloc
-if (USE_JEMALLOC)
-    include_directories("${CMAKE_BINARY_DIR}/jemalloc-build/include")
-endif()
-
 # Set up compiler flags
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${VALKEY_SERVER_CFLAGS}")
 message(STATUS "CFLAGS: ${CMAKE_C_FLAGS}")
