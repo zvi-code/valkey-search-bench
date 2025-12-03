@@ -35,7 +35,7 @@ python convert_parquet_to_hdf5.py \
 **Features:**
 - Low memory footprint for large datasets
 - Generates HDF5 with `/train`, `/test`, `/neighbors`, `/distances` structure
-- Compatible with `utils/datasets/prepare_binary.py`
+- Compatible with `prep_datasets/prepare_binary.py`
 
 Typically called by `dataset.sh`, not used directly.
 
@@ -47,7 +47,7 @@ All datasets follow this pipeline:
 Source Format → HDF5 (intermediate) → Binary (.bin)
      ↓              ↓                     ↓
   Download      Convert HDF5         prepare_binary.py
-                                     (in utils/datasets/)
+                                     (in prep_datasets/)
 ```
 
 ## Binary Format

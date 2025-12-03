@@ -181,7 +181,7 @@ Output: `/mnt/data/datasets/cohere-medium-1m.hdf5`
 ### Step 3: Convert HDF5 → Valkey Binary
 
 ```bash
-python utils/datasets/prepare_binary.py \
+python prep_datasets/prepare_binary.py \
   /mnt/data/datasets/cohere-medium-1m.hdf5 \
   /mnt/data/build-datasets/cohere-medium-1m.bin \
   --metric COSINE \
@@ -387,7 +387,7 @@ To add your own dataset:
 
 2. **Convert to binary**:
    ```bash
-   python utils/datasets/prepare_binary.py \
+   python prep_datasets/prepare_binary.py \
      custom.hdf5 custom.bin \
      --metric L2 --max-neighbors 100
    ```

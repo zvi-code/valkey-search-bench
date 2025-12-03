@@ -167,7 +167,7 @@ def main():
             verify_dataset(output_file)
             print(f"\n✓ Dummy dataset ready for testing!")
             print(f"Next steps:")
-            print(f"  1. Convert to binary: python utils/datasets/prepare_binary.py {output_file} dummy-test.bin")
+            print(f"  1. Convert to binary: python prep_datasets/prepare_binary.py {output_file} dummy-test.bin")
             print(f"  2. Add to test config: DATASET_CONFIG[\"dummy-test\"]=\"zvec_dummy:,{dimensions},{num_vectors},{k_neighbors}\"")
             print(f"  3. Test: ./test_multi_dataset.sh --dataset dummy-test")
     except Exception as e:

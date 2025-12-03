@@ -18,7 +18,6 @@ This is the **standalone Valkey Vector Benchmark** package - a specialized toolk
 
 **Benchmark & Search**:
 - `src/valkey-benchmark.c` - Main benchmark tool (focus on search functionality)
-- `src/valkey-benchmark-vgen.{c,h}` - Vector generator integration
 - `src/search_utils.{c,h}` - Shared cluster utilities
 
 **Dataset Infrastructure**:
@@ -32,8 +31,7 @@ This is the **standalone Valkey Vector Benchmark** package - a specialized toolk
 
 **Testing & Utilities**:
 - `vector-testing/*` - Multi-dataset testing scripts and workflows
-- `utils/datasets/*` - Dataset preparation and conversion utilities
-- `utils/vgenerator/*` - Vector generation library
+- `prep_datasets/*` - Dataset preparation and conversion utilities
 
 ### 2. Memory Allocator (CRITICAL)
 
@@ -57,7 +55,7 @@ This is the **standalone Valkey Vector Benchmark** package - a specialized toolk
 **Critical Files**:
 - `src/dataset_api.{c,h}` - Binary dataset format reader (4KB-aligned headers)
 - `convert_parquet_to_hdf5.py` - Memory-optimized converter (5000 vector batches)
-- `utils/datasets/prepare_binary.py` - HDF5 to binary converter
+- `prep_datasets/prepare_binary.py` - HDF5 to binary converter
 - `convert_vectordb_dataset.sh` - End-to-end wrapper script
 
 **Dataset Binary Format** (`dataset_api.h`):
@@ -326,7 +324,6 @@ Read in this order for fastest onboarding:
 
 **Core benchmark code**:
 - `src/valkey-benchmark.c` - Main benchmark tool (search functionality)
-- `src/valkey-benchmark-vgen.{c,h}` - Vector generator integration
 - `src/search_utils.{c,h}` - Shared cluster utilities
 
 **Core utilities** (from Valkey):
@@ -334,7 +331,7 @@ Read in this order for fastest onboarding:
 
 **Dataset handling**:
 - `src/dataset_api.{c,h}` - Binary format reader
-- `utils/datasets/*` - Dataset preparation scripts (HDF5→Binary conversion)
+- `prep_datasets/*` - Dataset preparation scripts (HDF5→Binary conversion)
 - `convert_parquet_to_hdf5.py` - Parquet→HDF5 (memory-optimized)
 
 **Cluster utilities**:
@@ -343,7 +340,6 @@ Read in this order for fastest onboarding:
 
 **Testing infrastructure**:
 - `vector-testing/*` - Multi-dataset test scripts
-- `utils/vgenerator/*` - Vector generation library
 - `test_ef_search_working.sh` - ef_search parameter analysis
 - `demo_ef_search_simple.sh` - Quick ef_search demo
 - `convert_vectordb_dataset.sh` - All-in-one dataset conversion

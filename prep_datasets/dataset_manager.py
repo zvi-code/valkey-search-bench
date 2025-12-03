@@ -342,7 +342,7 @@ def get_ann_benchmarks_dataset(name: str, info: Dict, output_bin: Path) -> bool:
     
     # Convert to binary using prepare_binary.py
     print(f"\nConverting to Valkey binary format...")
-    prepare_binary = UTILS_DIR / "prepare_binary.py"
+    prepare_binary = CONVERSION_DIR / "prepare_binary.py"
     
     cmd = [
         PYTHON_CMD, str(prepare_binary),
@@ -401,7 +401,7 @@ def get_vectordb_bench_dataset(name: str, info: Dict, output_bin: Path) -> bool:
         return False
     
     # Convert HDF5 to binary
-    prepare_binary = UTILS_DIR / "prepare_binary.py"
+    prepare_binary = CONVERSION_DIR / "prepare_binary.py"
     
     print(f"\nConverting to Valkey binary format...")
     cmd = [
@@ -550,7 +550,7 @@ def main():
         sys.exit(0 if success else 1)
     elif args.command == "convert":
         # Call prepare_binary.py
-        prepare_binary = UTILS_DIR / "prepare_binary.py"
+        prepare_binary = CONVERSION_DIR / "prepare_binary.py"
         cmd = [
             PYTHON_CMD, str(prepare_binary),
             args.input,

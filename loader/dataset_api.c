@@ -63,8 +63,6 @@ static int resolve_dataset_path(const char *name, char *out, size_t size) {
         "%s",                           /* Direct path */
         "./datasets/%s",                /* Datasets directory (primary) */
         "./datasets/%s.bin",            /* Datasets directory with .bin */
-        "./_datasets_prepared/%s.bin",  /* Local prepared (legacy) */
-        "./utils/datasets/%s.bin",      /* Utils location (legacy) */
         "/var/datasets/%s.bin",         /* System location */
         NULL
     };
