@@ -41,13 +41,12 @@ cd valkey-search-benchmark
 # If you already cloned without --recursive:
 # git submodule update --init --recursive
 
-# Build benchmark (jemalloc is built automatically from submodule)
-mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
-make -j$(nproc)
+# Build (jemalloc is built automatically during cmake configure)
+cmake -B build -S .
+make -C build -j$(nproc)
 
-# Verify jemalloc is linked
-nm bin/valkey-benchmark | grep je_malloc
+# Verify build
+./build/bin/valkey-benchmark --version
 ```
 
 ### Download and Convert Dataset
