@@ -34,9 +34,9 @@ pip install vectordb-bench==1.0.10 h5py pandas pyarrow numpy
 ### Build
 
 ```bash
-# Clone with submodules
-git clone --recursive https://github.com/your-org/valkey-search-benchmark.git
-cd valkey-search-benchmark
+git clone --recursive https://github.com/zvi-code/valkey-search-bench.git
+cd valkey-search-bench
+
 
 # If you already cloned without --recursive:
 # git submodule update --init --recursive

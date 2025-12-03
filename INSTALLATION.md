@@ -14,8 +14,8 @@ sudo apt-get install -y cmake gcc g++ make pkg-config python3 python3-pip python
 ### Step 2: Clone Repository
 
 ```bash
-git clone --recursive https://github.com/your-org/valkey-search-benchmark.git
-cd valkey-search-benchmark
+git clone --recursive https://github.com/zvi-code/valkey-search-bench.git
+cd valkey-search-bench
 ```
 
 > **Note**: The `--recursive` flag fetches required submodules. If you already cloned without it, run: `git submodule update --init --recursive`
