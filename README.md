@@ -5,7 +5,6 @@ A standalone benchmarking toolkit for evaluating vector search performance in Va
 ## Overview
 
 This package extracts the vector search benchmarking capabilities from the Valkey project into a standalone tool. It provides:
-s
 - **Dataset Pipeline**: Download, convert, and prepare vectordb-bench datasets (COHERE, OPENAI, SIFT, GIST, LAION, BIGANN)
 - **Binary Format**: Custom 4KB-aligned binary format with precomputed ground truth for recall validation
 - **Cluster Support**: Parallel cluster scanning with vector ID to cluster tag mapping
@@ -30,26 +29,26 @@ source venv/bin/activate
 pip install vectordb-bench==1.0.10 h5py pandas pyarrow numpy
 ```
 
-**Important**: This benchmark requires jemalloc. See [INSTALLATION.md](INSTALLATION.md) for complete setup instructions.
+**Note**: jemalloc is built automatically from the Valkey submodule. For detailed setup options, see [INSTALLATION.md](INSTALLATION.md).
 
 ### Build
 
 ```bash
-# First-time setup: Run the jemalloc setup script (auto-detects Valkey build)
-./setup_jemalloc.sh
-# Or manually specify Valkey build path:
-# ./setup_jemalloc.sh /path/to/valkey/build-release
+# Clone with submodules
+git clone --recursive https://github.com/your-org/valkey-search-benchmark.git
+cd valkey-search-benchmark
 
-# Build benchmark
+# If you already cloned without --recursive:
+# git submodule update --init --recursive
+
+# Build benchmark (jemalloc is built automatically from submodule)
 mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
-make valkey-benchmark -j$(nproc)
+make -j$(nproc)
 
 # Verify jemalloc is linked
 nm bin/valkey-benchmark | grep je_malloc
 ```
-
-For detailed jemalloc setup options, see [INSTALLATION.md](INSTALLATION.md#2-setup-jemalloc-required).
 
 ### Download and Convert Dataset
 
@@ -57,13 +56,13 @@ For detailed jemalloc setup options, see [INSTALLATION.md](INSTALLATION.md#2-set
 
 ```bash
 # List all available datasets
-./scripts/dataset.sh list
+./prep_datasets/dataset.sh list
 
 # Download and convert in one command
-./scripts/dataset.sh get cohere-medium-1m
+./prep_datasets/dataset.sh get cohere-medium-1m
 
 # Or for datasets with metadata (filtered search)
-./scripts/dataset.sh get yfcc-10m
+./prep_datasets/dataset.sh get yfcc-10m
 ```
 
 **Legacy method** (still works):
@@ -121,17 +120,17 @@ python prep_datasets/convert_parquet_to_hdf5.py \
 
 📚 **Complete documentation organized in 5 guides:**
 
-1. **[Installation Guide](docs/INSTALLATION.md)** - Setup, dependencies, and building
-2. **[Dataset Guide](docs/DATASETS.md)** - Downloading, converting, and managing datasets
-3. **[Benchmarking Guide](docs/BENCHMARKING.md)** - Running benchmarks and interpreting results
-4. **[Advanced Guide](docs/ADVANCED.md)** - Optimizer internals, metadata filtering, data formats
+1. **[Installation Guide](INSTALLATION.md)** - Setup, dependencies, and building
+2. **[Dataset Guide](DATASETS.md)** - Downloading, converting, and managing datasets
+3. **[Benchmarking Guide](BENCHMARKING.md)** - Running benchmarks and interpreting results
+4. **[Advanced Guide](ADVANCED.md)** - Optimizer internals, metadata filtering, data formats
 5. **[Runtime Configuration](RUNTIME_CONFIG.md)** - Server-side configuration management
 
 **Quick navigation:**
-- New to the project? Start with [Installation](docs/INSTALLATION.md)
-- Need datasets? See [Dataset Guide](docs/DATASETS.md)
-- Running benchmarks? Check [Benchmarking Guide](docs/BENCHMARKING.md)
-- Advanced features? Read [Advanced Guide](docs/ADVANCED.md)
+- New to the project? Start with [Installation](INSTALLATION.md)
+- Need datasets? See [Dataset Guide](DATASETS.md)
+- Running benchmarks? Check [Benchmarking Guide](BENCHMARKING.md)
+- Advanced features? Read [Advanced Guide](ADVANCED.md)
 - Server configuration? See [Runtime Configuration](RUNTIME_CONFIG.md)
 
 ## Features
@@ -141,9 +140,9 @@ python prep_datasets/convert_parquet_to_hdf5.py \
 **Unified Dataset Manager** - One command to download and convert any dataset:
 
 ```bash
-./scripts/dataset.sh list                    # Show all datasets
-./scripts/dataset.sh get <dataset-name>      # Download + convert
-./scripts/dataset.sh verify datasets/*.bin   # Verify integrity
+./prep_datasets/dataset.sh list                    # Show all datasets
+./prep_datasets/dataset.sh get <dataset-name>      # Download + convert
+./prep_datasets/dataset.sh verify datasets/*.bin   # Verify integrity
 ```
 
 **Preconfigured Datasets:**
@@ -204,10 +203,10 @@ The `yfcc-10m` dataset includes 200,386 tags (image descriptions, camera models,
 
 ```bash
 # Download YFCC-10M with metadata (2.6GB download → 8.1GB binary)
-./scripts/dataset.sh get yfcc-10m
+./prep_datasets/dataset.sh get yfcc-10m
 
 # Verify metadata is loaded
-./scripts/dataset.sh verify datasets/yfcc-10m.bin
+./prep_datasets/dataset.sh verify datasets/yfcc-10m.bin
 ```
 
 ### Running Filtered Search Benchmarks
@@ -236,7 +235,7 @@ Use the `--filtered` flag to enable metadata-aware recall calculation:
 - 108M tag assignments (~11 tags per vector avg)
 - 100K queries with 138K predicates (~1.4 predicates per query)
 
-**Note:** Currently, the `--filtered` flag affects recall calculation only. Full integration (adding metadata to HSET commands and predicates to FT.SEARCH queries) is documented in `METADATA_IMPLEMENTATION_STATUS.md`. See [Advanced Guide - Metadata Filtering](docs/ADVANCED.md#metadata-filtering) for complete details.
+**Note:** Currently, the `--filtered` flag affects recall calculation only. Full integration (adding metadata to HSET commands and predicates to FT.SEARCH queries) is documented in `METADATA_IMPLEMENTATION_STATUS.md`. See [Advanced Guide - Metadata Filtering](ADVANCED.md#metadata-filtering) for complete details.
 
 ## Adaptive Load Optimizer
 
@@ -291,7 +290,7 @@ The optimizer automatically tunes benchmark parameters to achieve your performan
 - Same as objectives
 - Example: `recall_avg:gt:0.95` means "recall must be greater than 0.95"
 
-See [Advanced Guide - Optimizer Internals](docs/ADVANCED.md#optimizer-internals) for algorithm details.
+See [Advanced Guide - Optimizer Internals](ADVANCED.md#optimizer-internals) for algorithm details.
 
 ## Configuration Persistence
 
@@ -520,13 +519,18 @@ See [RUNTIME_CONFIG.md](RUNTIME_CONFIG.md) for detailed documentation.
 ```
 valkey-search-benchmark/
 ├── loader/                # Core C source files (benchmark + dataset API)
-├── prep_datasets/         # Dataset download/conversion scripts
+├── prep_datasets/         # Dataset download/conversion scripts (Python)
 ├── bench/                 # Benchmarking scripts and utilities
-├── test/                  # Testing workflows and validation
-├── utils/
-│   └── datasets/          # Python dataset conversion toolkit
-├── docs/                  # Comprehensive documentation
-└── examples/              # Configuration examples
+│   ├── scripts/           # Helper scripts for benchmark analysis
+│   └── wrappers/          # Python wrappers for benchmark automation
+├── test/                  # Testing workflows and validation scripts
+├── deps/valkey/           # Valkey submodule (core utilities + dependencies)
+├── cmake/                 # CMake modules and configuration
+├── INSTALLATION.md        # Setup and building guide
+├── DATASETS.md            # Dataset management guide
+├── BENCHMARKING.md        # Running benchmarks guide
+├── ADVANCED.md            # Optimizer internals and metadata filtering
+└── RUNTIME_CONFIG.md      # Server-side configuration management
 ```
 
 ## Development
@@ -537,24 +541,27 @@ valkey-search-benchmark/
 # Debug build
 mkdir build-debug && cd build-debug
 cmake -DCMAKE_BUILD_TYPE=Debug ..
-make valkey-benchmark
+make -j$(nproc)
 
-# With custom allocator
-cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_MALLOC=jemalloc ..
-make valkey-benchmark
+# Release build (jemalloc is used by default on Linux)
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make -j$(nproc)
 ```
 
 ### Running Tests
 
 ```bash
+# From the build directory:
+cd build
+
 # Quick ef_search demo (30 seconds)
-./test/demo_ef_search_simple.sh
+../test/demo_ef_search_simple.sh
 
 # Full parameter sweep (5-10 minutes)
-./test/test_ef_search_working.sh
+../test/test_ef_search_working.sh
 
 # Multi-dataset testing
-./bench/test_multi_dataset.sh
+../bench/test_multi_dataset.sh
 ```
 
 ## Performance Expectations
@@ -586,6 +593,6 @@ Vector search benchmarking extensions and dataset pipeline by the Valkey communi
 
 ## Support
 
-- **Documentation**: See `docs/` directory
+- **Documentation**: See markdown files in the repository root (INSTALLATION.md, DATASETS.md, BENCHMARKING.md, ADVANCED.md)
 - **Issues**: Report benchmarking-specific issues
 - **Valkey Project**: https://valkey.io

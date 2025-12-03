@@ -3,9 +3,15 @@ project(valkey-benchmark)
 set(INSTALL_BIN_PATH ${CMAKE_INSTALL_PREFIX}/bin)
 set_directory_properties(PROPERTIES CLEAN_NO_CUSTOM 1)
 
-# Add include directories
+# Valkey submodule path
+set(VALKEY_SRC ${CMAKE_SOURCE_DIR}/deps/valkey/src)
+
+# Add include directories for this target only
+# VALKEY_SRC must be included here for valkey-benchmark sources to find
+# Valkey's headers (ae.h, sds.h, etc.) but NOT globally to avoid
+# polluting libvalkey's build with Valkey server's cluster.h
 include_directories("${CMAKE_SOURCE_DIR}/loader")
-include_directories("${CMAKE_SOURCE_DIR}/loader/core")
+include_directories("${VALKEY_SRC}")
 
 # Only include jemalloc paths if using jemalloc
 if (USE_JEMALLOC)
@@ -19,10 +25,7 @@ message(STATUS "CFLAGS: ${CMAKE_C_FLAGS}")
 # Get linker options
 get_valkey_server_linker_option(VALKEY_SERVER_LDFLAGS)
 
-# Add jemalloc static library to linker flags only if using jemalloc
-if (USE_JEMALLOC)
-    set(VALKEY_SERVER_LDFLAGS "${VALKEY_SERVER_LDFLAGS} ${CMAKE_BINARY_DIR}/jemalloc-build/lib/libjemalloc.a")
-endif()
+# jemalloc is linked via ALLOCATOR_LIB in valkey_build_and_install_bin macro
 
 # Target: valkey-benchmark
 list(APPEND BENCH_LIBS "fpconv")

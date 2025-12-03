@@ -812,7 +812,7 @@ static int64_t decode_vector_key_fixed(const char *key,
     }
     size_t prefix_len = strlen(config.search.prefix);
     size_t cluster_tag_len = config.cluster_mode? PLACEHOLDERS[CLUSTER_PLACEHOLDER_INDEX].len : 0;
-    // size_t key_len = strlen(key);
+    size_t key_len = strlen(key);
     const char *read_pos = key;
 
     /* Extract prefix if requested */

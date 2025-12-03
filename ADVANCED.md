@@ -246,7 +246,7 @@ Special dataset with rich metadata:
 
 ```bash
 # Download YFCC-10M with metadata
-./scripts/dataset.sh get yfcc-10m
+./prep_datasets/dataset.sh get yfcc-10m
 ```
 
 **Manual download:**
@@ -276,7 +276,7 @@ The YFCC-10M conversion is handled by the unified dataset manager:
 
 ```bash
 # Automated download and conversion
-./scripts/dataset.sh get yfcc-10m
+./prep_datasets/dataset.sh get yfcc-10m
 ```
 
 This automatically downloads all required files and creates the v2 binary format with metadata support.
@@ -628,7 +628,7 @@ hexdump -C dataset.bin | head -1
 # Should show: 00000000  01 b0 cd de ...
 
 # Check header
-./scripts/dataset.sh verify dataset.bin
+./prep_datasets/dataset.sh verify dataset.bin
 ```
 
 **Python verification:**

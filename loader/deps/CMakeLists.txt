@@ -1,16 +1,9 @@
 # Dependencies for valkey-benchmark
 
-# Use pre-built jemalloc from copied jemalloc-build directory
-set(JEMALLOC_LIB_DIR ${CMAKE_BINARY_DIR}/jemalloc-build/lib)
-set(JEMALLOC_INCLUDE_DIR ${CMAKE_BINARY_DIR}/jemalloc-build/include)
-
-# Create imported target for jemalloc
-add_library(jemalloc STATIC IMPORTED)
-set_target_properties(jemalloc PROPERTIES
-    IMPORTED_LOCATION ${JEMALLOC_LIB_DIR}/libjemalloc.a
-    INTERFACE_INCLUDE_DIRECTORIES ${JEMALLOC_INCLUDE_DIR}
-    INTERFACE_COMPILE_DEFINITIONS USE_JEMALLOC
-)
+# Build jemalloc from Valkey submodule
+if (USE_JEMALLOC)
+    add_subdirectory("${CMAKE_SOURCE_DIR}/deps/valkey/deps/jemalloc" "${CMAKE_BINARY_DIR}/jemalloc")
+endif()
 
 # Set libvalkey options
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries")
@@ -26,9 +19,9 @@ if (USE_RDMA)
     set(ENABLE_RDMA ON CACHE BOOL "If RDMA support should be compiled or not")
 endif ()
 
-# Let libvalkey use sds and dict provided by valkey
-set(DICT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/loader/core)
-set(SDS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/loader/core)
+# Let libvalkey use sds and dict provided by valkey submodule
+set(DICT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/deps/valkey/src)
+set(SDS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/deps/valkey/src)
 
 add_subdirectory(libvalkey)
 add_subdirectory(linenoise)

@@ -66,99 +66,20 @@ uname -m
 ### 1. Clone Repository
 
 ```bash
-git clone https://github.com/your-org/valkey-search-benchmark.git
+git clone --recursive https://github.com/your-org/valkey-search-benchmark.git
 cd valkey-search-benchmark
 ```
 
-### 2. Setup jemalloc (REQUIRED)
+**Note**: The `--recursive` flag is important - it fetches the Valkey submodule which provides core utilities and jemalloc.
 
-**This benchmark MUST be built with jemalloc** - the same memory allocator as Valkey. The core utilities expect jemalloc functions and will segfault without it.
-
-**ARM64 Note**: Jemalloc builds natively on ARM64 with excellent performance. No special configuration needed.
-
-#### Automated Setup (Recommended for All Platforms)
-
-Use the included setup script that auto-detects Valkey builds:
-
+If you already cloned without `--recursive`:
 ```bash
-cd ~/valkey-search-benchmark
-./setup_jemalloc.sh
-
-# Or specify Valkey build path manually:
-# ./setup_jemalloc.sh /path/to/valkey/build-release
+git submodule update --init --recursive
 ```
 
-The script will:
-- Auto-detect Valkey builds in common locations
-- Copy jemalloc to the correct location
-- Verify the installation
-- Work identically on ARM64 and x86_64
+### 2. Build valkey-benchmark
 
-#### Option A: Build jemalloc from Valkey repository (Manual)
-
-**Example: AWS Graviton3 (c7g) ARM64 instance**
-
-#### Option A: Build jemalloc from Valkey repository (Manual)
-
-**Example: AWS Graviton3 (c7g) ARM64 instance**
-
-```bash
-# Clone Valkey if you don't have it
-cd ~
-git clone --depth 1 https://github.com/valkey-io/valkey.git
-cd valkey
-
-# Build Valkey (this builds jemalloc as a dependency)
-# On ARM64 Graviton3, this typically takes 3-5 minutes
-mkdir build-release && cd build-release
-cmake -DCMAKE_BUILD_TYPE=Release ..
-make -j$(nproc)  # Uses all available cores (e.g., 8 on c7g.2xlarge)
-
-# Copy jemalloc to benchmark build directory
-cd ~/valkey-search-benchmark
-mkdir -p build/jemalloc-build
-cp -r ~/valkey/build-release/jemalloc-build/* build/jemalloc-build/
-
-# Verify jemalloc was copied (ARM64 binary)
-ls -lh build/jemalloc-build/lib/libjemalloc.a
-# Should show ~42MB static library (same size on ARM64 and x86_64)
-file build/jemalloc-build/lib/libjemalloc.a
-# Should show: ARM aarch64 (on ARM systems) or x86-64 (on x86 systems)
-```
-
-#### Option B: Use pre-built jemalloc (if available)
-
-If you already have a Valkey build directory with jemalloc:
-
-```bash
-cd ~/valkey-search-benchmark
-mkdir -p build/jemalloc-build
-
-# Copy from existing Valkey build
-cp -r /path/to/valkey/build-*/jemalloc-build/* build/jemalloc-build/
-```
-
-#### Option C: Build jemalloc standalone
-
-```bash
-cd ~/valkey-search-benchmark
-mkdir -p build
-cd build
-
-# Download and build jemalloc
-wget https://github.com/jemalloc/jemalloc/releases/download/5.3.0/jemalloc-5.3.0.tar.bz2
-tar xjf jemalloc-5.3.0.tar.bz2
-cd jemalloc-5.3.0
-./configure --prefix=$PWD/../jemalloc-build --with-jemalloc-prefix=je_
-make -j$(nproc)
-make install
-cd ..
-
-# Verify installation
-ls -lh jemalloc-build/lib/libjemalloc.a
-```
-
-### 3. Build valkey-benchmark
+The build system automatically fetches all dependencies from the Valkey submodule, including jemalloc.
 
 **Example: AWS Graviton3 ARM64 instance**
 
@@ -168,13 +89,13 @@ cd ~/valkey-search-benchmark
 # Create and enter build directory
 mkdir -p build && cd build
 
-# Configure (jemalloc is auto-detected from build/jemalloc-build/)
+# Configure - jemalloc is built automatically from the Valkey submodule
 cmake -DCMAKE_BUILD_TYPE=Release ..
 
 # Build valkey-benchmark
 # On Graviton3 c7g.2xlarge (8 vCPU): ~2-3 minutes
 # On Graviton4 c8g.4xlarge (16 vCPU): ~1-2 minutes
-make valkey-benchmark -j$(nproc)
+make -j$(nproc)
 
 # Verify build and jemalloc linkage
 ./bin/valkey-benchmark --version
@@ -228,7 +149,9 @@ nm bin/valkey-benchmark | grep je_ | head -5
 # Make sure jemalloc-build directory exists in build/
 ls build/jemalloc-build/lib/libjemalloc.a
 
-# If missing, follow Step 2 above to build/copy jemalloc
+# If missing, ensure submodules are initialized and rebuild:
+git submodule update --init --recursive
+cd build && rm -rf * && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j$(nproc)
 ```
 
 **Error: "Undefined reference to je_malloc"**
@@ -237,7 +160,7 @@ ls build/jemalloc-build/lib/libjemalloc.a
 cd build
 rm -rf *
 cmake -DCMAKE_BUILD_TYPE=Release ..
-make valkey-benchmark -j$(nproc)
+make -j$(nproc)
 ```
 
 **Segmentation fault when running**

@@ -1,159 +1,34 @@
 # -------------------------------------------------
-# Define the sources to be built
+# Define the sources to be built for valkey-benchmark
 # -------------------------------------------------
+# This project only builds valkey-benchmark, using Valkey submodule for core utilities
 
-# valkey-server source files
-set(VALKEY_SERVER_SRCS
-    ${CMAKE_SOURCE_DIR}/loader/threads_mngr.c
-    ${CMAKE_SOURCE_DIR}/loader/core/adlist.c
-    ${CMAKE_SOURCE_DIR}/loader/vector.c
-    ${CMAKE_SOURCE_DIR}/loader/quicklist.c
-    ${CMAKE_SOURCE_DIR}/loader/core/ae.c
-    ${CMAKE_SOURCE_DIR}/loader/core/anet.c
-    ${CMAKE_SOURCE_DIR}/loader/core/dict.c
-    ${CMAKE_SOURCE_DIR}/loader/hashtable.c
-    ${CMAKE_SOURCE_DIR}/loader/kvstore.c
-    ${CMAKE_SOURCE_DIR}/loader/core/sds.c
-    ${CMAKE_SOURCE_DIR}/loader/core/zmalloc.c
-    ${CMAKE_SOURCE_DIR}/loader/lzf_c.c
-    ${CMAKE_SOURCE_DIR}/loader/lzf_d.c
-    ${CMAKE_SOURCE_DIR}/loader/pqsort.c
-    ${CMAKE_SOURCE_DIR}/loader/zipmap.c
-    ${CMAKE_SOURCE_DIR}/loader/sha1.c
-    ${CMAKE_SOURCE_DIR}/loader/ziplist.c
-    ${CMAKE_SOURCE_DIR}/loader/core/release.c
-    ${CMAKE_SOURCE_DIR}/loader/memory_prefetch.c
-    ${CMAKE_SOURCE_DIR}/loader/io_threads.c
-    ${CMAKE_SOURCE_DIR}/loader/networking.c
-    ${CMAKE_SOURCE_DIR}/loader/core/util.c
-    ${CMAKE_SOURCE_DIR}/loader/object.c
-    ${CMAKE_SOURCE_DIR}/loader/db.c
-    ${CMAKE_SOURCE_DIR}/loader/replication.c
-    ${CMAKE_SOURCE_DIR}/loader/rdb.c
-    ${CMAKE_SOURCE_DIR}/loader/t_string.c
-    ${CMAKE_SOURCE_DIR}/loader/t_list.c
-    ${CMAKE_SOURCE_DIR}/loader/t_set.c
-    ${CMAKE_SOURCE_DIR}/loader/t_zset.c
-    ${CMAKE_SOURCE_DIR}/loader/t_hash.c
-    ${CMAKE_SOURCE_DIR}/loader/config.c
-    ${CMAKE_SOURCE_DIR}/loader/aof.c
-    ${CMAKE_SOURCE_DIR}/loader/pubsub.c
-    ${CMAKE_SOURCE_DIR}/loader/multi.c
-    ${CMAKE_SOURCE_DIR}/loader/debug.c
-    ${CMAKE_SOURCE_DIR}/loader/sort.c
-    ${CMAKE_SOURCE_DIR}/loader/intset.c
-    ${CMAKE_SOURCE_DIR}/loader/syncio.c
-    ${CMAKE_SOURCE_DIR}/loader/cluster.c
-    ${CMAKE_SOURCE_DIR}/loader/cluster_migrateslots.c
-    ${CMAKE_SOURCE_DIR}/loader/cluster_legacy.c
-    ${CMAKE_SOURCE_DIR}/loader/cluster_slot_stats.c
-    ${CMAKE_SOURCE_DIR}/loader/core/crc16.c
-    ${CMAKE_SOURCE_DIR}/loader/endianconv.c
-    ${CMAKE_SOURCE_DIR}/loader/commandlog.c
-    ${CMAKE_SOURCE_DIR}/loader/eval.c
-    ${CMAKE_SOURCE_DIR}/loader/bio.c
-    ${CMAKE_SOURCE_DIR}/loader/rio.c
-    ${CMAKE_SOURCE_DIR}/loader/rand.c
-    ${CMAKE_SOURCE_DIR}/loader/memtest.c
-    ${CMAKE_SOURCE_DIR}/loader/syscheck.c
-    ${CMAKE_SOURCE_DIR}/loader/core/crcspeed.c
-    ${CMAKE_SOURCE_DIR}/loader/core/crccombine.c
-    ${CMAKE_SOURCE_DIR}/loader/core/crc64.c
-    ${CMAKE_SOURCE_DIR}/loader/bitops.c
-    ${CMAKE_SOURCE_DIR}/loader/sentinel.c
-    ${CMAKE_SOURCE_DIR}/loader/notify.c
-    ${CMAKE_SOURCE_DIR}/loader/setproctitle.c
-    ${CMAKE_SOURCE_DIR}/loader/blocked.c
-    ${CMAKE_SOURCE_DIR}/loader/hyperloglog.c
-    ${CMAKE_SOURCE_DIR}/loader/latency.c
-    ${CMAKE_SOURCE_DIR}/loader/sparkline.c
-    ${CMAKE_SOURCE_DIR}/loader/valkey-check-rdb.c
-    ${CMAKE_SOURCE_DIR}/loader/valkey-check-aof.c
-    ${CMAKE_SOURCE_DIR}/loader/geo.c
-    ${CMAKE_SOURCE_DIR}/loader/lazyfree.c
-    ${CMAKE_SOURCE_DIR}/loader/module.c
-    ${CMAKE_SOURCE_DIR}/loader/evict.c
-    ${CMAKE_SOURCE_DIR}/loader/expire.c
-    ${CMAKE_SOURCE_DIR}/loader/geohash.c
-    ${CMAKE_SOURCE_DIR}/loader/geohash_helper.c
-    ${CMAKE_SOURCE_DIR}/loader/childinfo.c
-    ${CMAKE_SOURCE_DIR}/loader/allocator_defrag.c
-    ${CMAKE_SOURCE_DIR}/loader/defrag.c
-    ${CMAKE_SOURCE_DIR}/loader/core/siphash.c
-    ${CMAKE_SOURCE_DIR}/loader/rax.c
-    ${CMAKE_SOURCE_DIR}/loader/t_stream.c
-    ${CMAKE_SOURCE_DIR}/loader/listpack.c
-    ${CMAKE_SOURCE_DIR}/loader/localtime.c
-    ${CMAKE_SOURCE_DIR}/loader/lolwut.c
-    ${CMAKE_SOURCE_DIR}/loader/lolwut5.c
-    ${CMAKE_SOURCE_DIR}/loader/lolwut6.c
-    ${CMAKE_SOURCE_DIR}/loader/acl.c
-    ${CMAKE_SOURCE_DIR}/loader/tracking.c
-    ${CMAKE_SOURCE_DIR}/loader/socket.c
-    ${CMAKE_SOURCE_DIR}/loader/tls.c
-    ${CMAKE_SOURCE_DIR}/loader/rdma.c
-    ${CMAKE_SOURCE_DIR}/loader/core/sha256.c
-    ${CMAKE_SOURCE_DIR}/loader/timeout.c
-    ${CMAKE_SOURCE_DIR}/loader/setcpuaffinity.c
-    ${CMAKE_SOURCE_DIR}/loader/core/monotonic.c
-    ${CMAKE_SOURCE_DIR}/loader/core/mt19937-64.c
-    ${CMAKE_SOURCE_DIR}/loader/resp_parser.c
-    ${CMAKE_SOURCE_DIR}/loader/call_reply.c
-    ${CMAKE_SOURCE_DIR}/loader/lua/script_lua.c
-    ${CMAKE_SOURCE_DIR}/loader/script.c
-    ${CMAKE_SOURCE_DIR}/loader/functions.c
-    ${CMAKE_SOURCE_DIR}/loader/scripting_engine.c
-    ${CMAKE_SOURCE_DIR}/loader/lua/function_lua.c
-    ${CMAKE_SOURCE_DIR}/loader/lua/engine_lua.c
-    ${CMAKE_SOURCE_DIR}/loader/lua/debug_lua.c
-    ${CMAKE_SOURCE_DIR}/loader/trace/trace.c
-    ${CMAKE_SOURCE_DIR}/loader/trace/trace_rdb.c
-    ${CMAKE_SOURCE_DIR}/loader/trace/trace_aof.c
-    ${CMAKE_SOURCE_DIR}/loader/trace/trace_commands.c
-    ${CMAKE_SOURCE_DIR}/loader/trace/trace_db.c
-    ${CMAKE_SOURCE_DIR}/loader/trace/trace_cluster.c
-    ${CMAKE_SOURCE_DIR}/loader/trace/trace_server.c
-    ${CMAKE_SOURCE_DIR}/loader/commands.c
-    ${CMAKE_SOURCE_DIR}/loader/core/strl.c
-    ${CMAKE_SOURCE_DIR}/loader/connection.c
-    ${CMAKE_SOURCE_DIR}/loader/unix.c
-    ${CMAKE_SOURCE_DIR}/loader/server.c
-    ${CMAKE_SOURCE_DIR}/loader/logreqres.c
-    ${CMAKE_SOURCE_DIR}/loader/entry.c
-    ${CMAKE_SOURCE_DIR}/loader/vset.c)
+# Valkey submodule path
+set(VALKEY_SRC ${CMAKE_SOURCE_DIR}/deps/valkey/src)
 
-
-# valkey-cli
-set(VALKEY_CLI_SRCS
-    ${CMAKE_SOURCE_DIR}/loader/core/anet.c
-    ${CMAKE_SOURCE_DIR}/loader/core/adlist.c
-    ${CMAKE_SOURCE_DIR}/loader/core/dict.c
-    ${CMAKE_SOURCE_DIR}/loader/core/sds.c
-    ${CMAKE_SOURCE_DIR}/loader/core/sha256.c
-    ${CMAKE_SOURCE_DIR}/loader/core/util.c
-    ${CMAKE_SOURCE_DIR}/loader/valkey-cli.c
-    ${CMAKE_SOURCE_DIR}/loader/core/zmalloc.c
-    ${CMAKE_SOURCE_DIR}/loader/core/release.c
-    ${CMAKE_SOURCE_DIR}/loader/core/ae.c
-    ${CMAKE_SOURCE_DIR}/loader/core/serverassert.c
-    ${CMAKE_SOURCE_DIR}/loader/core/crcspeed.c
-    ${CMAKE_SOURCE_DIR}/loader/core/crccombine.c
-    ${CMAKE_SOURCE_DIR}/loader/core/crc64.c
-    ${CMAKE_SOURCE_DIR}/loader/core/siphash.c
-    ${CMAKE_SOURCE_DIR}/loader/core/crc16.c
-    ${CMAKE_SOURCE_DIR}/loader/core/monotonic.c
-    ${CMAKE_SOURCE_DIR}/loader/core/cli_common.c
-    ${CMAKE_SOURCE_DIR}/loader/core/mt19937-64.c
-    ${CMAKE_SOURCE_DIR}/loader/core/strl.c
-    ${CMAKE_SOURCE_DIR}/loader/cli_commands.c)
-
-# valkey-benchmark
+# valkey-benchmark sources
 set(VALKEY_BENCHMARK_SRCS
-    ${CMAKE_SOURCE_DIR}/loader/core/ae.c
-    ${CMAKE_SOURCE_DIR}/loader/core/anet.c
-    ${CMAKE_SOURCE_DIR}/loader/core/sds.c
-    ${CMAKE_SOURCE_DIR}/loader/core/sha256.c
-    ${CMAKE_SOURCE_DIR}/loader/core/util.c
+    # Core Valkey utilities from submodule
+    ${VALKEY_SRC}/ae.c
+    ${VALKEY_SRC}/anet.c
+    ${VALKEY_SRC}/sds.c
+    ${VALKEY_SRC}/sha256.c
+    ${VALKEY_SRC}/util.c
+    ${VALKEY_SRC}/adlist.c
+    ${VALKEY_SRC}/dict.c
+    ${VALKEY_SRC}/zmalloc.c
+    ${VALKEY_SRC}/serverassert.c
+    ${VALKEY_SRC}/release.c
+    ${VALKEY_SRC}/crcspeed.c
+    ${VALKEY_SRC}/crccombine.c
+    ${VALKEY_SRC}/crc64.c
+    ${VALKEY_SRC}/siphash.c
+    ${VALKEY_SRC}/crc16.c
+    ${VALKEY_SRC}/monotonic.c
+    ${VALKEY_SRC}/cli_common.c
+    ${VALKEY_SRC}/mt19937-64.c
+    ${VALKEY_SRC}/strl.c
+    # Benchmark-specific sources
     ${CMAKE_SOURCE_DIR}/loader/valkey-benchmark.c
     ${CMAKE_SOURCE_DIR}/loader/search_utils.c
     ${CMAKE_SOURCE_DIR}/loader/dataset_api.c
@@ -161,24 +36,4 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/loader/dataset_id_mapping.c
     ${CMAKE_SOURCE_DIR}/loader/utils.c
     ${CMAKE_SOURCE_DIR}/loader/load_optimizer.c
-    ${CMAKE_SOURCE_DIR}/loader/config_persist.c
-    ${CMAKE_SOURCE_DIR}/loader/core/adlist.c
-    ${CMAKE_SOURCE_DIR}/loader/core/dict.c
-    ${CMAKE_SOURCE_DIR}/loader/core/zmalloc.c
-    ${CMAKE_SOURCE_DIR}/loader/core/serverassert.c
-    ${CMAKE_SOURCE_DIR}/loader/core/release.c
-    ${CMAKE_SOURCE_DIR}/loader/core/crcspeed.c
-    ${CMAKE_SOURCE_DIR}/loader/core/crccombine.c
-    ${CMAKE_SOURCE_DIR}/loader/core/crc64.c
-    ${CMAKE_SOURCE_DIR}/loader/core/siphash.c
-    ${CMAKE_SOURCE_DIR}/loader/core/crc16.c
-    ${CMAKE_SOURCE_DIR}/loader/core/monotonic.c
-    ${CMAKE_SOURCE_DIR}/loader/core/cli_common.c
-    ${CMAKE_SOURCE_DIR}/loader/core/mt19937-64.c
-    ${CMAKE_SOURCE_DIR}/loader/core/strl.c)
-
-# valkey-rdma module
-set(VALKEY_RDMA_MODULE_SRCS ${CMAKE_SOURCE_DIR}/loader/rdma.c)
-
-# valkey-tls module
-set(VALKEY_TLS_MODULE_SRCS ${CMAKE_SOURCE_DIR}/loader/tls.c)
+    ${CMAKE_SOURCE_DIR}/loader/config_persist.c)

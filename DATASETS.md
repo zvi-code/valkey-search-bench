@@ -10,22 +10,22 @@ The simplest way to get datasets is using the shell wrapper:
 
 ```bash
 # List all available datasets
-./scripts/dataset.sh list
+./prep_datasets/dataset.sh list
 
 # Filter by name
-./scripts/dataset.sh list cohere
+./prep_datasets/dataset.sh list cohere
 
 # Download and convert in one command
-./scripts/dataset.sh get mnist                    # Small (60K vectors)
-./scripts/dataset.sh get sift-128                 # Medium (1M vectors)
-./scripts/dataset.sh get cohere-medium-1m         # Large (1M vectors, 768-dim)
-./scripts/dataset.sh get yfcc-10m                 # Extra large (10M vectors with metadata)
+./prep_datasets/dataset.sh get mnist                    # Small (60K vectors)
+./prep_datasets/dataset.sh get sift-128                 # Medium (1M vectors)
+./prep_datasets/dataset.sh get cohere-medium-1m         # Large (1M vectors, 768-dim)
+./prep_datasets/dataset.sh get yfcc-10m                 # Extra large (10M vectors with metadata)
 
 # Force re-download
-./scripts/dataset.sh get cohere-medium-1m --force
+./prep_datasets/dataset.sh get cohere-medium-1m --force
 
 # Verify integrity
-./scripts/dataset.sh verify datasets/*.bin
+./prep_datasets/dataset.sh verify datasets/*.bin
 ```
 
 The tool automatically:
@@ -42,9 +42,9 @@ Perfect for quick testing and CI/CD:
 
 | Dataset | Vectors | Dimensions | Metric | Size | Command |
 |---------|---------|-----------|--------|------|---------|
-| mnist | 60K | 784 | L2 | 180MB | `./scripts/dataset.sh get mnist` |
-| fashion-mnist | 60K | 784 | L2 | 180MB | `./scripts/dataset.sh get fashion-mnist` |
-| cohere-small-100k | 100K | 768 | COSINE | 290MB | `./scripts/dataset.sh get cohere-small-100k` |
+| mnist | 60K | 784 | L2 | 180MB | `./prep_datasets/dataset.sh get mnist` |
+| fashion-mnist | 60K | 784 | L2 | 180MB | `./prep_datasets/dataset.sh get fashion-mnist` |
+| cohere-small-100k | 100K | 768 | COSINE | 290MB | `./prep_datasets/dataset.sh get cohere-small-100k` |
 
 ### Medium Datasets (1M vectors)
 
@@ -52,12 +52,12 @@ Good balance of scale and manageability:
 
 | Dataset | Vectors | Dimensions | Metric | Size | Command |
 |---------|---------|-----------|--------|------|---------|
-| sift-128 | 1M | 128 | L2 | 500MB | `./scripts/dataset.sh get sift-128` |
-| gist-960 | 1M | 960 | L2 | 3.6GB | `./scripts/dataset.sh get gist-960` |
-| glove-25 | 1.18M | 25 | COSINE | 120MB | `./scripts/dataset.sh get glove-25` |
-| glove-50 | 1.18M | 50 | COSINE | 240MB | `./scripts/dataset.sh get glove-50` |
-| glove-100 | 1.18M | 100 | COSINE | 480MB | `./scripts/dataset.sh get glove-100` |
-| cohere-medium-1m | 1M | 768 | COSINE | 2.9GB | `./scripts/dataset.sh get cohere-medium-1m` |
+| sift-128 | 1M | 128 | L2 | 500MB | `./prep_datasets/dataset.sh get sift-128` |
+| gist-960 | 1M | 960 | L2 | 3.6GB | `./prep_datasets/dataset.sh get gist-960` |
+| glove-25 | 1.18M | 25 | COSINE | 120MB | `./prep_datasets/dataset.sh get glove-25` |
+| glove-50 | 1.18M | 50 | COSINE | 240MB | `./prep_datasets/dataset.sh get glove-50` |
+| glove-100 | 1.18M | 100 | COSINE | 480MB | `./prep_datasets/dataset.sh get glove-100` |
+| cohere-medium-1m | 1M | 768 | COSINE | 2.9GB | `./prep_datasets/dataset.sh get cohere-medium-1m` |
 
 ### Large Datasets (5-10M vectors)
 
@@ -65,12 +65,12 @@ Production-scale testing:
 
 | Dataset | Vectors | Dimensions | Metric | Size | Command |
 |---------|---------|-----------|--------|------|---------|
-| deep-96 | 10M | 96 | COSINE | 3.6GB | `./scripts/dataset.sh get deep-96` |
-| bigann-10m | 10M | 128 | L2 | 5GB | `./scripts/dataset.sh get bigann-10m` |
-| **yfcc-10m** | 10M | 192 | L2 | 8.1GB | `./scripts/dataset.sh get yfcc-10m` |
-| cohere-large-10m | 10M | 768 | COSINE | 29GB | `./scripts/dataset.sh get cohere-large-10m` |
-| openai-medium-500k | 500K | 1536 | COSINE | 2.9GB | `./scripts/dataset.sh get openai-medium-500k` |
-| openai-large-5m | 5M | 1536 | COSINE | 29GB | `./scripts/dataset.sh get openai-large-5m` |
+| deep-96 | 10M | 96 | COSINE | 3.6GB | `./prep_datasets/dataset.sh get deep-96` |
+| bigann-10m | 10M | 128 | L2 | 5GB | `./prep_datasets/dataset.sh get bigann-10m` |
+| **yfcc-10m** | 10M | 192 | L2 | 8.1GB | `./prep_datasets/dataset.sh get yfcc-10m` |
+| cohere-large-10m | 10M | 768 | COSINE | 29GB | `./prep_datasets/dataset.sh get cohere-large-10m` |
+| openai-medium-500k | 500K | 1536 | COSINE | 2.9GB | `./prep_datasets/dataset.sh get openai-medium-500k` |
+| openai-large-5m | 5M | 1536 | COSINE | 29GB | `./prep_datasets/dataset.sh get openai-large-5m` |
 
 **Bold** = Includes metadata for filtered search
 
@@ -104,8 +104,8 @@ python prep_datasets/download_dataset.py OPENAI 5000000
 Standard ML/NLP datasets:
 
 ```bash
-./scripts/dataset.sh get mnist
-./scripts/dataset.sh get glove-100
+./prep_datasets/dataset.sh get mnist
+./prep_datasets/dataset.sh get glove-100
 ```
 
 ### BigANN (SIFT1B, Deep1B Subsets)
@@ -113,8 +113,8 @@ Standard ML/NLP datasets:
 Billion-scale competition datasets:
 
 ```bash
-./scripts/dataset.sh get bigann-10m
-./scripts/dataset.sh get deep-10m
+./prep_datasets/dataset.sh get bigann-10m
+./prep_datasets/dataset.sh get deep-10m
 ```
 
 **Important**: BigANN subsets require **subset-specific** ground truth files, not the full 1B ground truth!
@@ -130,7 +130,7 @@ Billion-scale competition datasets:
 Special dataset with metadata tags for filtered search:
 
 ```bash
-./scripts/dataset.sh get yfcc-10m
+./prep_datasets/dataset.sh get yfcc-10m
 ```
 
 **Metadata features:**
@@ -195,7 +195,7 @@ Output: `/mnt/data/build-datasets/cohere-medium-1m.bin`
 For automatic conversion, use the unified dataset manager:
 
 ```bash
-./scripts/dataset.sh get cohere-medium-1m
+./prep_datasets/dataset.sh get cohere-medium-1m
 ```
 
 This automatically handles all three steps (download, convert to HDF5, convert to binary).
@@ -295,10 +295,10 @@ rm -rf /mnt/data/datasets/cohere/cohere_large_10m
 ls -lh /mnt/data/build-datasets/
 
 # Verify dataset integrity
-./scripts/dataset.sh verify /mnt/data/build-datasets/*.bin
+./prep_datasets/dataset.sh verify /mnt/data/build-datasets/*.bin
 
 # Clean all datasets
-./scripts/dataset.sh clean
+./prep_datasets/dataset.sh clean
 ```
 
 ## Performance Considerations
@@ -340,7 +340,7 @@ pip install vectordb-bench==1.0.10
 ```bash
 # Retry with longer timeout
 export DATASET_TIMEOUT=300
-./scripts/dataset.sh get cohere-medium-1m
+./prep_datasets/dataset.sh get cohere-medium-1m
 ```
 
 ### Conversion Issues
@@ -368,7 +368,7 @@ hexdump -C dataset.bin | head -20
 ```bash
 # Use NVMe storage (see INSTALLATION.md)
 # Or clean up old files
-./scripts/dataset.sh clean
+./prep_datasets/dataset.sh clean
 ```
 
 ## Custom Dataset Integration
@@ -394,7 +394,7 @@ To add your own dataset:
 
 3. **Verify**:
    ```bash
-   ./scripts/dataset.sh verify custom.bin
+   ./prep_datasets/dataset.sh verify custom.bin
    ```
 
 ## Next Steps

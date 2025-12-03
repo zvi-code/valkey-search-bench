@@ -137,7 +137,7 @@ CONVERGED
   -t vec-query --search --vector-dim 768
 ```
 
-**Documentation**: See `docs/GRID_SEARCH_IMPLEMENTATION.md` for detailed algorithm explanation.
+**Documentation**: See `ADVANCED.md` for detailed algorithm explanation.
 
 ## Critical Workflows
 

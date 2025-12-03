@@ -6,7 +6,7 @@ Generic tools for converting vector datasets to Valkey binary format.
 
 This directory contains format-agnostic conversion utilities used by the unified dataset manager.
 
-**For end users**: Use `../../scripts/dataset.sh` for all dataset operations (download, convert, verify).
+**For end users**: Use `./prep_datasets/dataset.sh` (from project root) for all dataset operations (download, convert, verify).
 
 ## Tools
 
@@ -64,9 +64,9 @@ Final output is Valkey binary format (`.bin`):
 
 ```bash
 # From project root
-./scripts/dataset.sh list              # Show all available datasets
-./scripts/dataset.sh get mnist         # Download + convert
-./scripts/dataset.sh verify file.bin   # Verify integrity
+./prep_datasets/dataset.sh list              # Show all available datasets
+./prep_datasets/dataset.sh get mnist         # Download + convert
+./prep_datasets/dataset.sh verify file.bin   # Verify integrity
 ```
 
-See [../../docs/DATASETS.md](../../docs/DATASETS.md) for complete documentation.
+See [../DATASETS.md](../DATASETS.md) for complete documentation.

@@ -243,7 +243,7 @@ The `ef_search` parameter controls the HNSW search quality vs speed trade-off.
 
 ```bash
 cd build
-../scripts/testing/demo_ef_search_simple.sh
+../test/demo_ef_search_simple.sh
 ```
 
 **Example output:**
@@ -259,7 +259,7 @@ cd build
 
 ```bash
 cd build
-../scripts/testing/test_ef_search_working.sh
+../test/test_ef_search_working.sh
 ```
 
 Tests multiple ef_search values and generates detailed metrics.
@@ -440,7 +440,7 @@ Test multiple datasets in sequence:
 
 ```bash
 cd build
-../scripts/testing/test_multi_dataset.sh
+../bench/test_multi_dataset.sh
 ```
 
 This script tests several datasets and generates comparison CSV.
@@ -470,7 +470,7 @@ The `--filtered` flag enables metadata-aware ground truth matching.
 **Solutions:**
 1. Increase ef_search: `--search-query-params '{"EF_RUNTIME":"400"}'`
 2. Check vector normalization (for COSINE metric)
-3. Verify dataset integrity: `./scripts/dataset.sh verify dataset.bin`
+3. Verify dataset integrity: `./prep_datasets/dataset.sh verify dataset.bin`
 
 ### Low QPS
 

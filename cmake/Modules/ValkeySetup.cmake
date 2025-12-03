@@ -137,7 +137,8 @@ endif ()
 if (BUILD_MALLOC)
     if ("${BUILD_MALLOC}" STREQUAL "jemalloc")
         set(MALLOC_LIB "jemalloc")
-        set(ALLOCATOR_LIB "jemalloc")
+        # Use the jemalloc we build from the submodule, not system jemalloc
+        set(ALLOCATOR_LIB "${CMAKE_BINARY_DIR}/jemalloc-build/lib/libjemalloc.a")
         add_valkey_server_compiler_options("-DUSE_JEMALLOC")
         set(USE_JEMALLOC 1)
     elseif ("${BUILD_MALLOC}" STREQUAL "libc")
@@ -277,17 +278,37 @@ if (BUILD_SANITIZER)
     endif ()
 endif ()
 
-include_directories("${CMAKE_SOURCE_DIR}/loader/deps/libvalkey/include")
-include_directories("${CMAKE_SOURCE_DIR}/loader/deps/linenoise")
-include_directories("${CMAKE_SOURCE_DIR}/loader/deps/lua/src")
-include_directories("${CMAKE_SOURCE_DIR}/loader/deps/hdr_histogram")
-include_directories("${CMAKE_SOURCE_DIR}/loader/deps/fpconv")
+# Valkey submodule paths
+set(VALKEY_SRC_DIR "${CMAKE_SOURCE_DIR}/deps/valkey/src")
+set(VALKEY_DEPS_DIR "${CMAKE_SOURCE_DIR}/deps/valkey/deps")
 
-add_subdirectory("${CMAKE_SOURCE_DIR}/loader/deps")
+# Include directories for deps we use directly (not VALKEY_SRC_DIR!)
+# NOTE: Do NOT add VALKEY_SRC_DIR to global includes - it would pollute
+# libvalkey with Valkey server's cluster.h instead of libvalkey's own
+include_directories("${VALKEY_DEPS_DIR}/libvalkey/include")
+include_directories("${VALKEY_DEPS_DIR}/linenoise")
+include_directories("${VALKEY_DEPS_DIR}/hdr_histogram")
+include_directories("${VALKEY_DEPS_DIR}/fpconv")
 
-# Update linker flags for the allocator
+# Set include paths for libvalkey to find dict.h and sds.h from Valkey
+# Must be set as non-cache variables right before libvalkey is added
+set(DICT_INCLUDE_DIR "${VALKEY_SRC_DIR}")
+set(SDS_INCLUDE_DIR "${VALKEY_SRC_DIR}")
+
+# libvalkey options - must be set before add_subdirectory
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries")
+set(DISABLE_TESTS ON CACHE BOOL "If tests should be compiled or not")
+
+# Build dependencies directly (not using deps/CMakeLists.txt which has wrong paths)
+# We only need: libvalkey, linenoise, fpconv, hdr_histogram, and optionally jemalloc
+add_subdirectory("${VALKEY_DEPS_DIR}/libvalkey" "${CMAKE_BINARY_DIR}/valkey-deps/libvalkey")
+add_subdirectory("${VALKEY_DEPS_DIR}/linenoise" "${CMAKE_BINARY_DIR}/valkey-deps/linenoise")
+add_subdirectory("${VALKEY_DEPS_DIR}/fpconv" "${CMAKE_BINARY_DIR}/valkey-deps/fpconv")
+add_subdirectory("${VALKEY_DEPS_DIR}/hdr_histogram" "${CMAKE_BINARY_DIR}/valkey-deps/hdr_histogram")
+
+# jemalloc include path
 if (USE_JEMALLOC)
-    include_directories("${CMAKE_SOURCE_DIR}/loader/deps/jemalloc/include")
+    include_directories("${CMAKE_BINARY_DIR}/jemalloc-build/include")
 endif ()
 
 # Common compiler flags
