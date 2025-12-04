@@ -3002,7 +3002,8 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                                     r->str);
                         } else
                             fprintf(stderr, "Error from server: %s\n", r->str);
-                        assert(0);
+                        fflush(stderr);
+                        exit(1);  /* Graceful exit on server error */
                     }
                 }
                 if (c->prefix_pending <= 0 && c->running_queries > 0) {
@@ -4948,11 +4949,13 @@ int parseOptions(int argc, char **argv) {
             if (lastarg) goto invalid;
             config.dataset_name = sdsnew(argv[++i]);
             config.use_dataset = 1;
+            config.use_search = 1;  /* Dataset implies search mode */
         } else if (!strcmp(argv[i], "--dataset-path")) {
             if (lastarg) goto invalid;
             sdsfree(config.dataset_name);
             config.dataset_name = sdsnew(argv[++i]);
             config.use_dataset = 1;
+            config.use_search = 1;  /* Dataset implies search mode */
         } else if (!strcmp(argv[i], "--filtered")) {
             config.use_filtered_search = 1;
         } else if (!strcmp(argv[i], "--optimize")) {
@@ -6136,7 +6139,7 @@ int main(int argc, char **argv) {
             config.dataset_ctx = dataset_init(config.dataset_name, &info);
 
             if (!config.dataset_ctx) {
-                fprintf(stderr, "Failed to initialize dataset: %s\n", config.dataset_name);
+                /* Detailed error already printed by dataset_init */
                 exit(1);
             }            
             /* Store metadata */

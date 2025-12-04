@@ -59,6 +59,24 @@ static const char *dtype_names[] = {
 
 /* Path resolution: try multiple locations */
 static int resolve_dataset_path(const char *name, char *out, size_t size) {
+    /* If path is absolute, only check that path */
+    if (name[0] == '/') {
+        snprintf(out, size, "%s", name);
+        if (access(out, R_OK) == 0) return 0;
+        
+        fprintf(stderr, "\n");
+        fprintf(stderr, "ERROR: Dataset file not found\n");
+        fprintf(stderr, "  Path: %s\n", name);
+        fprintf(stderr, "\n");
+        fprintf(stderr, "To download a dataset, run:\n");
+        fprintf(stderr, "  ./prep_datasets/dataset.sh get <dataset-name>\n");
+        fprintf(stderr, "\n");
+        fprintf(stderr, "Available datasets: mnist, sift, gist, deep, glove, cohere, dbpedia\n");
+        fprintf(stderr, "For more info, see: DATASETS.md\n");
+        fprintf(stderr, "\n");
+        return -1;
+    }
+
     const char *search_paths[] = {
         "%s",                           /* Direct path */
         "./datasets/%s",                /* Datasets directory (primary) */
@@ -72,7 +90,32 @@ static int resolve_dataset_path(const char *name, char *out, size_t size) {
         if (access(out, R_OK) == 0) return 0;
     }
 
-    fprintf(stderr, "Dataset not found: %s\n", name);
+    /* Extract just the dataset name for suggestions */
+    const char *dataset_name = name;
+    const char *last_slash = strrchr(name, '/');
+    if (last_slash) dataset_name = last_slash + 1;
+    
+    /* Remove .bin extension if present for cleaner suggestion */
+    char clean_name[256];
+    snprintf(clean_name, sizeof(clean_name), "%s", dataset_name);
+    char *ext = strstr(clean_name, ".bin");
+    if (ext && ext[4] == '\0') *ext = '\0';
+
+    fprintf(stderr, "\n");
+    fprintf(stderr, "ERROR: Dataset not found: %s\n", name);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "Searched locations:\n");
+    fprintf(stderr, "  • ./%s\n", name);
+    fprintf(stderr, "  • ./datasets/%s\n", name);
+    fprintf(stderr, "  • ./datasets/%s.bin\n", name);
+    fprintf(stderr, "  • /var/datasets/%s.bin\n", name);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "To download the dataset, run:\n");
+    fprintf(stderr, "  ./prep_datasets/dataset.sh get %s\n", clean_name);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "Available datasets: mnist, sift, gist, deep, glove, cohere, dbpedia\n");
+    fprintf(stderr, "For more info, see: DATASETS.md\n");
+    fprintf(stderr, "\n");
     return -1;
 }
 
