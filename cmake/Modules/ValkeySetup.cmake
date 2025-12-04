@@ -306,6 +306,11 @@ set(SDS_INCLUDE_DIR "${VALKEY_SRC_DIR}")
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries")
 set(DISABLE_TESTS ON CACHE BOOL "If tests should be compiled or not")
 
+# Enable TLS in libvalkey if requested
+if (USE_TLS)
+    set(ENABLE_TLS ON CACHE BOOL "Build TLS support in libvalkey")
+endif ()
+
 # Build dependencies directly (not using deps/CMakeLists.txt which has wrong paths)
 # We only need: libvalkey, linenoise, fpconv, hdr_histogram
 add_subdirectory("${VALKEY_DEPS_DIR}/libvalkey" "${CMAKE_BINARY_DIR}/valkey-deps/libvalkey")
