@@ -6221,18 +6221,23 @@ int main(int argc, char **argv) {
         last_info_all = getInfoCluster(config.selected_node_count, config.selected_nodes, config.ct);
         if (config.use_dataset) {
             /* Build vector ID mappings by scanning cluster for pre-existing vectors */
-            /* Note: New vectors inserted during benchmark will update the mapping in real-time */
-            printf("Building vector ID to cluster tag mappings from existing cluster data...\n");
-            int64_t scan_result = buildVectorIdMappings(config.cluster_mode,
-                                                config.search.prefix,
-                                                config.selected_nodes,
-                                                config.selected_node_count,
-                                                &cluster_tag_map, vectorKeyProcessor);
-            if (scan_result != 0) {
-                fprintf(stderr, "WARNING: Failed to build vector ID mappings, validation may be limited\n");
+            /* Skip scan if cluster has no indexed documents */
+            if (search_total_docs == 0) {
+                printf("Cluster has no indexed documents, skipping initial mapping scan.\n");
             } else {
-                printf("Initial mapping built. New insertions will update mapping in real-time.\n");
-            }        
+                /* Note: New vectors inserted during benchmark will update the mapping in real-time */
+                printf("Building vector ID to cluster tag mappings from existing cluster data (%lld docs)...\n", search_total_docs);
+                int64_t scan_result = buildVectorIdMappings(config.cluster_mode,
+                                                    config.search.prefix,
+                                                    config.selected_nodes,
+                                                    config.selected_node_count,
+                                                    &cluster_tag_map, vectorKeyProcessor);
+                if (scan_result != 0) {
+                    fprintf(stderr, "WARNING: Failed to build vector ID mappings, validation may be limited\n");
+                } else {
+                    printf("Initial mapping built. New insertions will update mapping in real-time.\n");
+                }
+            }
         }
     }    
     /* Apply runtime configuration if specified */
