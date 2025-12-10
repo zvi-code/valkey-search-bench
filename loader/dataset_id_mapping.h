@@ -68,19 +68,23 @@ void addClusterTagMapping(clusterTagMap *tag_map, uint64_t vector_id, const char
  */
 const char* getClusterTagForVector(clusterTagMap *tag_map, uint64_t vector_id);
 int checkVectorExistsInCluster(clusterTagMap *tag_map, uint64_t vector_id);
+
 /**
  * Build vector ID mappings by scanning cluster for vector keys
  * @param prefix Vector key prefix to scan for
  * @param nodes Array of cluster nodes
  * @param node_count Number of cluster nodes
  * @param tag_map Output mapping table
+ * @param key_processor Callback function to process each key
+ * @param connection_factory Factory function for creating node connections (handles TLS/auth)
  * @return 0 on success, negative error code on failure
  */
 int buildVectorIdMappings(int64_t is_cluster_mode_enabled, const char *prefix,
                          struct clusterNode **nodes,
                          int64_t node_count,
                          clusterTagMap *tag_map,
-                        keyProcessorCallback key_processor);
+                         keyProcessorCallback key_processor,
+                         connectionFactoryCallback connection_factory);
 
 size_t getClusterTagMapCount(clusterTagMap *tag_map);
 /**

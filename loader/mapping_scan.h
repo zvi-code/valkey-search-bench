@@ -65,6 +65,9 @@ typedef int64_t (*keyProcessorCallback)(const char *key, void *user_data, int64_
 /* Scan progress callback function type */
 typedef void (*scanProgressCallback)(uint64_t keys_processed, int64_t active_threads, void *user_data);
 
+/* Connection factory callback - creates a valkeyContext for a given node */
+typedef valkeyContext* (*connectionFactoryCallback)(struct clusterNode *node);
+
 /* Per-node scan worker configuration */
 typedef struct {
     struct clusterNode *node;     /* Target cluster node */
@@ -92,6 +95,9 @@ typedef struct {
     int64_t scan_batch_size;           /* SCAN batch size (default: 1000) */
     int64_t max_concurrent_workers;    /* Max parallel workers (default: node_count) */
     int64_t silent_mode;               /* Suppress [SCAN] output messages (for progress bars) */
+
+    /* Connection factory - creates connections with proper TLS/auth if needed */
+    connectionFactoryCallback connection_factory; /* NULL = use default valkeyConnect */
 
     /* Callback functions */
     keyProcessorCallback key_processor;     /* Process each discovered key */
@@ -155,5 +161,14 @@ void setClusterScanPerformance(clusterScanConfig *config,
  */
 void setClusterScanProgressCallback(clusterScanConfig *config,
                                    scanProgressCallback progress_callback);
+
+/**
+ * Set connection factory for creating node connections
+ * This allows the caller to provide TLS-enabled connections
+ * @param config Configuration to modify
+ * @param factory Connection factory function (NULL = use default valkeyConnect)
+ */
+void setClusterScanConnectionFactory(clusterScanConfig *config,
+                                     connectionFactoryCallback factory);
 
 #endif /* CLUSTER_SCAN_H */

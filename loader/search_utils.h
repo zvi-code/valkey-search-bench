@@ -21,9 +21,10 @@
 /* Engine types */
 typedef enum {
     ENGINE_TYPE_UNKNOWN = 0,
-    ENGINE_TYPE_OSS_VALKEY,      /* Open Source Valkey */
-    ENGINE_TYPE_ELASTICACHE_VALKEY,    /* ElastiCache Valkey */
-    ENGINE_TYPE_MEMORYDB     /* Amazon MemoryDB */
+    ENGINE_TYPE_OSS_VALKEY,           /* Open Source Valkey */
+    ENGINE_TYPE_ELASTICACHE_VALKEY,   /* ElastiCache Valkey (provisioned) */
+    ENGINE_TYPE_ELASTICACHE_SERVERLESS, /* ElastiCache Serverless */
+    ENGINE_TYPE_MEMORYDB              /* Amazon MemoryDB */
 } EngineType;
 /* Forward declarations */
 struct serverConfig;

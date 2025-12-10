@@ -179,13 +179,21 @@ cleanup:
 
 /**
  * Create Redis connection for a cluster node
+ * Uses the connection factory if provided, otherwise falls back to basic valkeyConnect
  */
+static connectionFactoryCallback g_connection_factory = NULL;
+
 static valkeyContext* createNodeConnection(struct clusterNode *node) {
     if (!node || !node->ip || node->port <= 0) {
         return NULL;
     }
 
-    /* Create basic TCP connection to the node */
+    /* Use connection factory if provided (handles TLS, auth, etc.) */
+    if (g_connection_factory) {
+        return g_connection_factory(node);
+    }
+
+    /* Fallback to basic TCP connection */
     valkeyContext *context = valkeyConnect(node->ip, node->port);
     if (!context || context->err) {
         if (context) {
@@ -233,10 +241,18 @@ void setClusterScanProgressCallback(clusterScanConfig *config,
     config->progress_callback = progress_callback;
 }
 
+void setClusterScanConnectionFactory(clusterScanConfig *config,
+                                     connectionFactoryCallback factory) {
+    config->connection_factory = factory;
+}
+
 int executeClusterScan(clusterScanConfig *config, clusterScanResults *results) {
     if (!config || !config->nodes || !config->key_processor) {
         return SCAN_ERROR_CALLBACK;
     }
+
+    /* Set global connection factory for worker threads to use */
+    g_connection_factory = config->connection_factory;
 
     uint64_t start_time = getCurrentTimeMs();
     int64_t actual_workers = (config->max_concurrent_workers < config->node_count) ?

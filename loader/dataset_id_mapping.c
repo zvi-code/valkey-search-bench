@@ -101,7 +101,8 @@ int buildVectorIdMappings(int64_t is_cluster_mode_enabled, const char *prefix,
                          struct clusterNode **nodes,
                          int64_t node_count,
                          clusterTagMap *tag_map,
-                        keyProcessorCallback key_processor) {
+                         keyProcessorCallback key_processor,
+                         connectionFactoryCallback connection_factory) {
     if (!prefix || !nodes || !tag_map) {
         return -1;
     }
@@ -125,6 +126,9 @@ int buildVectorIdMappings(int64_t is_cluster_mode_enabled, const char *prefix,
 
     /* Enable silent mode to avoid interfering with progress bar */
     scan_config.silent_mode = 1;
+
+    /* Set connection factory for TLS/auth support */
+    setClusterScanConnectionFactory(&scan_config, connection_factory);
 
     /* Set performance parameters for vector scanning */
     setClusterScanPerformance(&scan_config, 1000, node_count, 50000);

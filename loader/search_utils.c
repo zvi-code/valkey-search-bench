@@ -868,10 +868,18 @@ EngineType getEngineType(const char *ip_or_path, int port, enum valkeyConnection
     /* check info for : os:Amazon MemoryDB */
     valkeyContext *ctx = getValkeyContext(ct, ip_or_path, port);
     if (!ctx) return ENGINE_TYPE_UNKNOWN; /* Error obtaining context */
+    
+    /* Check if this is EC Serverless by hostname pattern:
+     * Pattern: <cluster-name>.serverless.<region>.cache.amazonaws.com
+     * Example: zsearch-serverless-ajfdds.serverless.euw1devo.cache.amazonaws.com */
+    int is_serverless = (strstr(ip_or_path, ".serverless.") != NULL && 
+                         strstr(ip_or_path, ".cache.amazonaws.com") != NULL);
+    
     // send command to node
     valkeyReply *reply = valkeyCommand(ctx, "INFO");
     if (!reply) {
         printf("Error: No response from node %s while checking index status.\n", ip_or_path);
+        valkeyFree(ctx);
         return ENGINE_TYPE_UNKNOWN;
     }
     // get the string value of line starts with os:
@@ -881,9 +889,14 @@ EngineType getEngineType(const char *ip_or_path, int port, enum valkeyConnection
         if (strstr(os_line, "Amazon MemoryDB") != NULL) {
             result = ENGINE_TYPE_MEMORYDB; /* It's a MemoryDB node */
         } else if (strstr(os_line, "Amazon ElastiCache") != NULL) {
-            result = ENGINE_TYPE_ELASTICACHE_VALKEY; /* It's a Redis node */
+            /* Differentiate between provisioned and serverless */
+            if (is_serverless) {
+                result = ENGINE_TYPE_ELASTICACHE_SERVERLESS;
+            } else {
+                result = ENGINE_TYPE_ELASTICACHE_VALKEY;
+            }
         } else {
-            result = ENGINE_TYPE_OSS_VALKEY; /* Unknown engine */
+            result = ENGINE_TYPE_OSS_VALKEY; /* OSS Valkey */
         }
     } else {
         printf("Error: 'os' field not found in INFO output on node %s.\n", ip_or_path);

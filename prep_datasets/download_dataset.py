@@ -25,7 +25,8 @@ from vectordb_bench import config
 from vectordb_bench.backend.dataset import Dataset
 
 # Override the default dataset directory to use NVMe
-config.DATASET_LOCAL_DIR = "/mnt/data/datasets"
+# config.DATASET_LOCAL_DIR = "/mnt/data/datasets"
+config.DATASET_LOCAL_DIR = os.environ.get("DATASET_PATH", "/home/ubuntu/valkey-search-bench/datasets/raw")
 
 def download_dataset(dataset_name, size):
     """Download a specific dataset with given size"""

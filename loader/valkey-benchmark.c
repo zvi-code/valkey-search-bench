@@ -323,8 +323,13 @@ typedef struct _client {
     int64_t dataset_query_head;           /* Head position in dataset query index queue */
     int64_t dataset_query_tail;           /* Tail position in dataset query index queue */
     int64_t dataset_query_capacity;       /* Capacity of dataset query index queue */
+    uint64_t *inflight_indices;      /* Queue of in-flight dataset indices for retry tracking */
+    int64_t inflight_head;           /* Head position in inflight queue */
+    int64_t inflight_tail;           /* Tail position in inflight queue */
+    int64_t inflight_capacity;       /* Capacity of inflight queue */
     uint64_t paused : 1;
     uint64_t reuse : 1;
+    uint64_t request_prepared : 1;
     int64_t running_queries;
 } *client;
 
@@ -338,6 +343,12 @@ typedef struct benchmarkThread {
     int64_t *node_request_counters;  /* Array of request counts per node (current cycle) */
     int64_t *node_quota_remaining;   /* Array of remaining quota per node */
     list *clients;
+    /* Per-thread retry queue for failed dataset operations */
+    uint64_t *retry_queue;           /* Queue of dataset indices to retry */
+    int64_t retry_queue_head;        /* Head position (consumer) */
+    int64_t retry_queue_tail;        /* Tail position (producer) */
+    int64_t retry_queue_capacity;    /* Capacity of retry queue */
+    int64_t retry_count;             /* Number of retry attempts made by this thread */
 } benchmarkThread;
 
 
@@ -432,6 +443,11 @@ static struct config {
     uint32_t dataset_num_neighbors; /* Ground truth k */
     _Atomic uint64_t dataset_prefill_counter;  /* Insert counter */
     _Atomic uint64_t dataset_query_counter;    /* Query counter */
+    
+    /* Connection tracking for error reporting and retry */
+    _Atomic int64_t connection_errors;         /* Count of server connection closures */
+    _Atomic int64_t lost_responses;            /* Responses not received due to connection close */
+    int64_t max_retries;                       /* Maximum retry attempts per thread (0 = disabled) */
     
     /* Load Optimizer configuration */
     int64_t optimize_enabled;         /* Enable adaptive optimization */
@@ -1107,6 +1123,17 @@ static void printDatasetRecallStats(void) {
     printf("==========================================\n");
 }
 
+
+/**
+ * Connection factory for cluster scan operations
+ * Uses getValkeyContext which handles TLS, auth, and connection options
+ */
+static valkeyContext* scanConnectionFactory(struct clusterNode *node) {
+    if (!node || !node->ip || node->port <= 0) {
+        return NULL;
+    }
+    return getValkeyContext(config.ct, node->ip, node->port);
+}
 
 /**
  * Key processor callback for vector ID mapping
@@ -2004,6 +2031,11 @@ static void createDefaultSearchIndexes(void) {
             continue;
         }
         valkeyReply *reply = NULL;
+        printf("Creating index with: algorithm=%s, prefix=%s, vector_field=%s, dim=%ld, metric=%s, m=%ld, ef_construction=%ld, ef_runtime=%ld\n",
+               algorithms[i], config.search.prefix, config.search.vector_field, 
+               config.search.vector_dim, config.search.metric, config.search.m,
+               config.search.ef_construction, config.search.ef_search);
+        fflush(stdout);
         if (strcmp(algorithms[i], "hnsw") == 0) {
             /* Add TAG field if configured */
             if (config.search.tag_field) {            
@@ -2028,14 +2060,32 @@ static void createDefaultSearchIndexes(void) {
         if (reply && (reply->type == VALKEY_REPLY_STRING || reply->type == VALKEY_REPLY_STATUS)) {
             printf("Index created successfully\n");
         } else {
-            fprintf(stderr, "Failed to create index: %s\n", 
-                    reply ? reply->str : "Unknown error");
+            const char *err_msg = "No reply";
+            if (reply) {
+                if (reply->type == VALKEY_REPLY_ERROR) {
+                    err_msg = reply->str ? reply->str : "(error with NULL message)";
+                } else {
+                    static char type_buf[64];
+                    snprintf(type_buf, sizeof(type_buf), "Unexpected reply type: %d", reply->type);
+                    err_msg = type_buf;
+                }
+            } else if (ctx->err) {
+                /* Connection error - reply is NULL due to connection issue */
+                static char conn_err_buf[256];
+                snprintf(conn_err_buf, sizeof(conn_err_buf), "Connection error: %s (code %d)", 
+                        ctx->errstr, ctx->err);
+                err_msg = conn_err_buf;
+            }
+            fprintf(stderr, "Failed to create index: %s\n", err_msg);
             // if index already exists, we can ignore the error
-            if (reply && reply->type == VALKEY_REPLY_ERROR && index_exists) {
+            if (reply && reply->type == VALKEY_REPLY_ERROR && strstr(reply->str ? reply->str : "", "already exists")) {
+                printf("Index '%s' already exists, ignoring error.\n", indexes_to_create[i]);
+            } else if (reply && reply->type == VALKEY_REPLY_ERROR && strstr(reply->str ? reply->str : "", "Index already exists")) {
                 printf("Index '%s' already exists, ignoring error.\n", indexes_to_create[i]);
             } else {
-                fprintf(stderr, "Error creating index: %s\n", reply ? reply->str : "Unknown error");
-                assert(0);
+                fprintf(stderr, "Error creating index (cannot continue): %s\n", err_msg);
+                if (reply) freeReplyObject(reply);
+                exit(1);
             }
         }
         if (reply) freeReplyObject(reply);    
@@ -2290,6 +2340,14 @@ static void replacePlaceholderDataset(
             }
             datasetGetVector((dataset_ctx_t*)config.dataset_ctx, dataset_idx,
                 &vector_id, vec_write_pos);
+            
+            /* Track this dataset index as in-flight for retry purposes */
+            if (c && c->inflight_indices && 
+                (c->inflight_tail - c->inflight_head) < c->inflight_capacity) {
+                int64_t idx = c->inflight_tail % c->inflight_capacity;
+                c->inflight_indices[idx] = dataset_idx;
+                c->inflight_tail++;
+            }
       
             encode_vector_key_fixed(key, key_len,
                                    NULL,
@@ -2330,29 +2388,12 @@ static void replacePlaceholderDataset(
                 addClusterTagMapping(&cluster_tag_map, vector_id, cluster_tag_to_map);
             }
 
-            /* Debug output for first few inserts */
-            static int64_t debug_count = 0;
-            if (debug_count < 5) {
-                printf("DEBUG INSERT: dataset_idx=%lu, vector_id=%lu, key_str='%.*s', vec_size=%lu bytes\n",
-                        dataset_idx, vector_id, (int)key_len, key, config.search.vector_dim * 4);
-                // if (tag_count == 0) {
-                //     printf("DEBUG INSERT: dataset_idx=%lu, vector_id=%lu, key_str='%s', vec_size=%lu bytes\n",
-                //         dataset_idx, vector_id, key, config.search.vector_dim * 4);
-                // } else {
-                //     char *tag_payload_start = cmd + tag_indices[i] -6;
-                //     // int64_t header_len = snprintf(NULL, 0, "%ld", config.search.payload_tag_len);
-                //     // char *tag_value_start = tag_payload_start;
-                //     // int64_t tag_value_len = 0;
-                //     // while (tag_value_start[tag_value_len] != '\r' && tag_value_len < config.search.payload_tag_len) {
-                //     //     tag_value_len++;
-                //     // }
-                //     sds tag_value = sdsnewlen(tag_payload_start, config.search.payload_tag_len);
-                //     printf("DEBUG INSERT: dataset_idx=%lu, vector_id=%lu, tag_value='%s', vec_size=%lu bytes\n",
-                //         dataset_idx, vector_id, tag_value, config.search.vector_dim * 4);
-                //     sdsfree(tag_value);
-                //     // printf("DEBUG CMD DUMP:START<\n%.*s\nDEBUG CMD DUMP - END>\n", 1600, cmd);
-                // }
-                debug_count++;
+            /* Debug output for inserts - log all for small datasets, first 5 otherwise */
+            static _Atomic int64_t debug_count = 0;
+            int64_t current_debug = atomic_fetch_add(&debug_count, 1);
+            if (config.dataset_num_vectors <= 500 || current_debug < 5) {
+                printf("DEBUG INSERT [%ld]: dataset_idx=%lu, vector_id=%lu, key='%.*s', prefilled=%ld\n",
+                        current_debug, dataset_idx, vector_id, (int)key_len, key, dataset_prefilled);
             }
         }
     }
@@ -2558,6 +2599,30 @@ static void freeClient(client c) {
     sdsfree(c->obuf);
     zfree(c->stagptr);
     if (c->dataset_query_indices) zfree(c->dataset_query_indices);
+    
+    /* Transfer in-flight indices to thread's retry queue if using dataset mode */
+    if (c->inflight_indices && c->thread_id >= 0 && config.use_dataset) {
+        benchmarkThread *thread = config.threads[c->thread_id];
+        int64_t inflight_count = c->inflight_tail - c->inflight_head;
+        if (inflight_count > 0 && thread->retry_queue && 
+            thread->retry_count < config.max_retries) {
+            /* Move in-flight items to retry queue */
+            for (int64_t i = c->inflight_head; i < c->inflight_tail; i++) {
+                int64_t idx = i % c->inflight_capacity;
+                int64_t retry_idx = thread->retry_queue_tail % thread->retry_queue_capacity;
+                if ((thread->retry_queue_tail - thread->retry_queue_head) < thread->retry_queue_capacity) {
+                    thread->retry_queue[retry_idx] = c->inflight_indices[idx];
+                    thread->retry_queue_tail++;
+                }
+            }
+            if (inflight_count > 0) {
+                fprintf(stderr, "[Thread %ld] Queued %ld in-flight requests for retry\n", 
+                        c->thread_id, inflight_count);
+            }
+        }
+    }
+    if (c->inflight_indices) zfree(c->inflight_indices);
+    
     if (config.num_threads) pthread_mutex_lock(&(config.liveclients_mutex));
     config.liveclients--;
     list* l;
@@ -2598,6 +2663,7 @@ static void resetClient(client c) {
         aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
     }
     c->written = 0;
+    c->request_prepared = 0;
     c->pending = config.pipeline * c->seqlen;
     /* Reset query index queue for dataset */
     c->dataset_query_head = 0;
@@ -2956,18 +3022,41 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     if (c->latency < 0) c->latency = ustime() - (c->start);
 
     if (valkeyBufferRead(c->context) != VALKEY_OK) {
-        fprintf(stderr, "Error: %s\n", c->context->errstr);
-        assert(0);
+        fprintf(stderr, "\nConnection error: %s\n", c->context->errstr);
+        
+        /* Track connection error statistics */
+        atomic_fetch_add_explicit(&config.connection_errors, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&config.lost_responses, c->pending, memory_order_relaxed);
+        
+        fprintf(stderr, "  Lost %ld pending responses (total lost: %ld)\n",
+                (int64_t)c->pending,
+                atomic_load_explicit(&config.lost_responses, memory_order_relaxed));
+        
+        /* Connection error - mark client for reconnection instead of crashing */
+        freeClient(c);
+        return;
     } else {
         while (c->pending) {
             if (valkeyGetReply(c->context, &reply) != VALKEY_OK) {
-                fprintf(stderr, "Error: %s\n", c->context->errstr);
-                assert(0);
+                fprintf(stderr, "\nConnection error while reading reply: %s\n", c->context->errstr);
+                
+                /* Track connection error statistics */
+                atomic_fetch_add_explicit(&config.connection_errors, 1, memory_order_relaxed);
+                atomic_fetch_add_explicit(&config.lost_responses, c->pending, memory_order_relaxed);
+                
+                fprintf(stderr, "  Lost %ld pending responses (total lost: %ld)\n",
+                        (int64_t)c->pending,
+                        atomic_load_explicit(&config.lost_responses, memory_order_relaxed));
+                
+                /* Connection error during reply - mark client for reconnection */
+                freeClient(c);
+                return;
             }
             if (reply != NULL) {
                 if (reply == (void *)VALKEY_REPLY_ERROR) {
                     fprintf(stderr, "Unexpected error reply, exiting...\n");
-                    assert(0);
+                    freeClient(c);
+                    return;
                 }
                 valkeyReply *r = reply;
                 if (r->type == VALKEY_REPLY_ERROR) {
@@ -3030,6 +3119,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     continue;
                 }
                 int64_t requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
+                
                 if (requests_finished < config.requests) {
                     if (config.num_threads == 0) {
                         hdr_record_value(config.latency_histogram, // Histogram to record to
@@ -3052,6 +3142,12 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     }
                 }
                 c->pending--;
+                
+                /* Pop from in-flight queue on successful response (vec-load/insert operations) */
+                if (c->inflight_indices && c->inflight_head < c->inflight_tail) {
+                    c->inflight_head++;
+                }
+                
                 if (c->pending == 0) {
                     clientDone(c);
                     break;
@@ -3164,20 +3260,40 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     c->reuse = 0;
 
     /* Initialize request when nothing was written. */
-    if (c->written == 0) {
-        /* Enforce upper bound to number of requests. */
-        int64_t requests_issued = atomic_fetch_add_explicit(&config.requests_issued,
-                                                        config.pipeline * c->seqlen,
-                                                        memory_order_relaxed);
-        if (requests_issued >= config.requests) {
-            return;
-        }
+    if (c->written == 0 && !c->request_prepared) {
+        /* Enforce upper bound to number of requests.
+         * We use a compare-exchange loop to avoid over-incrementing the counter
+         * when the limit is reached. The old approach of fetch_add followed by
+         * a check would increment even when returning early, causing counter
+         * corruption over time. */
+        int64_t increment = config.pipeline * c->seqlen;
+        int64_t current = atomic_load_explicit(&config.requests_issued, memory_order_relaxed);
+        int64_t new_val;
+        do {
+            if (current >= config.requests) {
+                /* All requests have been issued. Remove the writable event to
+                 * avoid hot spinning. But if this client still has pending
+                 * requests (sent but responses not yet received), we need to
+                 * keep the readable handler active to receive them. */
+                aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
+                if (c->pending > 0) {
+                    /* Ensure readable handler is active to receive pending responses */
+                    aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
+                }
+                return;
+            }
+            new_val = current + increment;
+        } while (!atomic_compare_exchange_weak_explicit(&config.requests_issued,
+                                                        &current, new_val,
+                                                        memory_order_relaxed,
+                                                        memory_order_relaxed));
 
         /* Really initialize: replace keys and set start time. */
         replacePlaceholders(c, c->obuf + c->prefixlen, config.pipeline);
         c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
         c->start = ustime();
         c->latency = -1;
+        c->request_prepared = 1;
     }
     const ssize_t buflen = sdslen(c->obuf);
     const ssize_t writeLen = buflen - c->written;
@@ -3287,6 +3403,14 @@ static client createClient(char *cmd, int64_t len, int64_t seqlen, client from, 
     c->dataset_query_indices = zcalloc(sizeof(uint64_t) * c->dataset_query_capacity);
     c->dataset_query_head = 0;
     c->dataset_query_tail = 0;
+    
+    /* Initialize in-flight queue for tracking dataset indices pending response */
+    c->inflight_capacity = config.pipeline * 2;  /* 2x pipeline for safety */
+    if (c->inflight_capacity < 64) c->inflight_capacity = 64;  /* Minimum size */
+    c->inflight_indices = zcalloc(sizeof(uint64_t) * c->inflight_capacity);
+    c->inflight_head = 0;
+    c->inflight_tail = 0;
+    
     /* Suppress libvalkey cleanup of unused buffers for max speed. */
     c->context->reader->maxbuf = 0;
 
@@ -3355,6 +3479,7 @@ static client createClient(char *cmd, int64_t len, int64_t seqlen, client from, 
     }
 
     c->written = 0;
+    c->request_prepared = 0;
     c->seqlen = seqlen;
     c->pending = config.pipeline * seqlen + c->prefix_pending;
     c->stagptr = NULL;
@@ -3455,6 +3580,26 @@ static void showLatencyReport(void) {
         printf("%*s\r", (int)config.last_printed_bytes, " "); // ensure there is a clean line
         printf("====== %s ======\n", config.title);      
         printf("  %ld requests completed in %.2f seconds\n", config.requests_finished, (float)config.totlatency / 1000);
+        
+        /* Report request/response mismatch if any */
+        int64_t requests_issued = atomic_load_explicit(&config.requests_issued, memory_order_relaxed);
+        int64_t lost = atomic_load_explicit(&config.lost_responses, memory_order_relaxed);
+        int64_t conn_errors = atomic_load_explicit(&config.connection_errors, memory_order_relaxed);
+        
+        if (requests_issued != config.requests_finished || conn_errors > 0) {
+            printf("\n  *** CONNECTION ISSUES DETECTED ***\n");
+            printf("  Requests issued:    %ld\n", requests_issued);
+            printf("  Responses received: %ld\n", config.requests_finished);
+            if (lost > 0) {
+                printf("  Lost responses:     %ld (%.1f%%)\n", lost,
+                       100.0 * lost / (requests_issued > 0 ? requests_issued : 1));
+            }
+            if (conn_errors > 0) {
+                printf("  Connection errors:  %ld\n", conn_errors);
+            }
+            printf("  *********************************\n\n");
+        }
+        
         printf("  %ld parallel clients\n", config.numclients);
         printf("  %ld bytes payload\n", config.datasize);
         printf("  keep alive: %ld\n", config.keepalive);
@@ -3827,6 +3972,17 @@ static benchmarkThread *createBenchmarkThread(int64_t index) {
     for (int64_t i = 0; i < config.selected_node_count; i++) {
         thread->node_quota_remaining[i] = config.balance_quota_step;
     }
+    
+    /* Initialize per-thread retry queue for dataset operations */
+    /* Capacity = pipeline * numclients_per_thread to handle worst case */
+    int64_t clients_per_thread = (config.numclients + config.num_threads - 1) / config.num_threads;
+    thread->retry_queue_capacity = config.pipeline * clients_per_thread * 2;  /* 2x for safety margin */
+    if (thread->retry_queue_capacity < 1024) thread->retry_queue_capacity = 1024;  /* Minimum size */
+    thread->retry_queue = zcalloc(sizeof(uint64_t) * thread->retry_queue_capacity);
+    thread->retry_queue_head = 0;
+    thread->retry_queue_tail = 0;
+    thread->retry_count = 0;
+    
     /* Note: Recall statistics are aggregated globally and shown in main output,
      * not per-thread, since recall is computed across all queries. */
     aeCreateTimeEvent(thread->el, 1, showThroughput, (void *)thread, NULL);
@@ -3846,6 +4002,7 @@ static void freeBenchmarkThread(benchmarkThread *thread) {
 
     zfree(thread->node_request_counters);
     zfree(thread->node_quota_remaining);
+    if (thread->retry_queue) zfree(thread->retry_queue);
     zfree(thread);
 }
 
@@ -4746,7 +4903,7 @@ static sds selectTagByDistribution(void) {
 
 void setDefaultSearchConfig(void) {
     config.search.name = sdsnew("test_vector_index");
-    config.search.prefix = NULL;//sdsnew("vec:");
+    config.search.prefix = sdsnew("vec:");
     config.search.vector_field = sdsnew("vector_field");
     config.search.vector_dim = 128; // Default vector dimension
     config.search.ef_construction = 256; // Default EF Construction
@@ -4823,6 +4980,13 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--rps")) {
             if (lastarg) goto invalid;
             config.rps = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--max-retries")) {
+            if (lastarg) goto invalid;
+            config.max_retries = atoi(argv[++i]);
+            if (config.max_retries < 0) {
+                fprintf(stderr, "Invalid max-retries (must be >= 0)\n");
+                exit(1);
+            }
         } else if (!strcmp(argv[i], "--balance-nodes")) {
             config.balance_nodes = 1;
         } else if (!strcmp(argv[i], "--balance-quota-step")) {
@@ -5365,6 +5529,8 @@ usage:
         " -I                 Idle mode. Just open N idle connections and wait.\n"
         " -x                 Read last argument from STDIN.\n"
         " --rps <requests>   Limit the total number of requests per second. Default 0 (no limit)\n"
+        " --max-retries <n>  Maximum reconnection attempts on connection loss. Default 3.\n"
+        "                    Set to 0 to disable retries.\n"
         " --balance-nodes    Enable fair load distribution across cluster nodes using quota-based balancing.\n"
         "                    Each node gets a quota of requests per cycle. When the slowest node\n"
         "                    completes its quota, all nodes get refreshed quota and continue.\n"
@@ -5578,8 +5744,34 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     }
 
     if (liveclients == 0 && requests_finished != config.requests) {
-        fprintf(stderr, "All clients disconnected... aborting.\n");
-        assert(0);
+        int64_t lost = atomic_load_explicit(&config.lost_responses, memory_order_relaxed);
+        int64_t requests_issued = atomic_load_explicit(&config.requests_issued, memory_order_relaxed);
+        
+        fprintf(stderr, "\nAll clients disconnected after %ld/%ld requests.\n",
+                requests_finished, config.requests);
+        fprintf(stderr, "  Requests issued: %ld, Responses received: %ld, Lost: %ld\n",
+                requests_issued, requests_finished, lost);
+        
+        /* Report pending retries per thread */
+        if (config.num_threads > 0 && config.threads && config.use_dataset) {
+            int64_t total_pending = 0;
+            for (int64_t t = 0; t < config.num_threads; t++) {
+                benchmarkThread *bt = config.threads[t];
+                if (bt && bt->retry_queue) {
+                    int64_t pending = bt->retry_queue_tail - bt->retry_queue_head;
+                    total_pending += pending;
+                }
+            }
+            if (total_pending > 0) {
+                fprintf(stderr, "  Pending retries queued: %ld\n", total_pending);
+            }
+        }
+        
+        fprintf(stderr, "This may indicate a server-side connection issue (e.g., serverless timeout).\n");
+        fprintf(stderr, "Try using --rps <rate> to limit request rate.\n");
+        /* Stop gracefully instead of crashing */
+        aeStop(eventLoop);
+        return AE_NOMORE;
     }
     if (config.num_threads && requests_finished >= config.requests) {
         aeStop(eventLoop);
@@ -5759,6 +5951,11 @@ int main(int argc, char **argv) {
     config.optimize_csv_file = NULL;
     config.optimize_max_iterations = 50;
     config.optimize_min_requests = 1000;
+    
+    /* Initialize connection retry defaults */
+    config.connection_errors = 0;
+    config.lost_responses = 0;
+    config.max_retries = 3;  /* Default: up to 3 retry attempts per thread */
 
     /* Initialize config persistence */
     config_persist_init();
@@ -6200,10 +6397,18 @@ int main(int argc, char **argv) {
         } else if (config.cluster_mode == 0) {
             cluster_mode_str = "CMD (Cluster Mode Disabled)";
         }
-        // createSearchHsetTemplate(&cmd);
-        printf("Using search indexes for the benchmark. %s - %s\n", 
-               config.engine_type == ENGINE_TYPE_MEMORYDB ? "MemoryDB" : config.engine_type == ENGINE_TYPE_ELASTICACHE_VALKEY ? "EC Valkey" : "OSS",
-               cluster_mode_str);
+        
+        /* Get engine type display string */
+        const char *engine_str = "OSS";
+        if (config.engine_type == ENGINE_TYPE_MEMORYDB) {
+            engine_str = "MemoryDB";
+        } else if (config.engine_type == ENGINE_TYPE_ELASTICACHE_SERVERLESS) {
+            engine_str = "EC Serverless";
+        } else if (config.engine_type == ENGINE_TYPE_ELASTICACHE_VALKEY) {
+            engine_str = "EC Valkey";
+        }
+        
+        printf("Using search indexes for the benchmark. %s - %s\n", engine_str, cluster_mode_str);
 
         createDefaultSearchIndexes();
         sleep(2); /* wait a bit before checking index status */
@@ -6214,25 +6419,41 @@ int main(int argc, char **argv) {
         long long search_total_docs = 0;
         long long search_ingest_field_vector = 0;
         long long search_background_indexing_status = 0;
-        last_search_info = getSearchInfo(config.selected_node_count, config.selected_nodes, config.ct,
-                                        &search_memory, &search_reclaimable, &search_total_docs,
-                                        &search_ingest_field_vector, &search_background_indexing_status);
+        
+        /* EC Serverless: INFO SEARCH returns empty, skip it and use FT.INFO instead */
+        if (config.engine_type != ENGINE_TYPE_ELASTICACHE_SERVERLESS) {
+            last_search_info = getSearchInfo(config.selected_node_count, config.selected_nodes, config.ct,
+                                            &search_memory, &search_reclaimable, &search_total_docs,
+                                            &search_ingest_field_vector, &search_background_indexing_status);
+        }
+        
         last_ftinfo = getFtInfoStatistics(config.search.name, config.selected_node_count, config.selected_nodes, config.ct);
-        last_info_all = getInfoCluster(config.selected_node_count, config.selected_nodes, config.ct);
+        
+        /* Fallback: If INFO SEARCH returns 0 docs (or was skipped), get num_docs from FT.INFO */
+        if (search_total_docs == 0 && last_ftinfo) {
+            for (int i = 0; i < last_ftinfo->num_fields; i++) {
+                if (last_ftinfo->fields[i].valid && 
+                    strcmp(last_ftinfo->fields[i].field_name, "num_docs") == 0) {
+                    search_total_docs = last_ftinfo->fields[i].value;
+                    break;
+                }
+            }
+        }
+        
+        /* EC Serverless: Skip INFO ALL as some metrics are not available */
+        if (config.engine_type != ENGINE_TYPE_ELASTICACHE_SERVERLESS) {
+            last_info_all = getInfoCluster(config.selected_node_count, config.selected_nodes, config.ct);
+        }
         if (config.use_dataset) {
-            /* Build vector ID mappings by scanning cluster for pre-existing vectors */
-            /* Skip scan if cluster has no indexed documents */
             if (search_total_docs == 0) {
                 printf("Cluster has no indexed documents, skipping initial mapping scan.\n");
             } else {
-                /* Note: New vectors inserted during benchmark will update the mapping in real-time */
+                /* Build vector ID mappings by scanning cluster for pre-existing vectors */
                 printf("Building vector ID to cluster tag mappings from existing cluster data (%lld docs)...\n", search_total_docs);
-                int64_t scan_result = buildVectorIdMappings(config.cluster_mode,
-                                                    config.search.prefix,
-                                                    config.selected_nodes,
-                                                    config.selected_node_count,
-                                                    &cluster_tag_map, vectorKeyProcessor);
-                if (scan_result != 0) {
+                if (buildVectorIdMappings(config.cluster_mode, config.search.prefix,
+                        config.selected_nodes, config.selected_node_count,
+                        &cluster_tag_map, vectorKeyProcessor, scanConnectionFactory) != 0)
+                {
                     fprintf(stderr, "WARNING: Failed to build vector ID mappings, validation may be limited\n");
                 } else {
                     printf("Initial mapping built. New insertions will update mapping in real-time.\n");
@@ -6545,6 +6766,15 @@ int main(int argc, char **argv) {
                 len = createSearchHsetTemplate(&cmd);
                 benchmark("VEC-LOAD", cmd, len);
                 zfree(cmd);
+                
+                /* Debug: print counter values */
+                printf("DEBUG VEC-LOAD: requests=%lu, dataset_prefill_counter=%lu, cluster_tag_map_count=%lu, requests_issued=%ld, requests_finished=%ld\n",
+                    config.requests, 
+                    atomic_load(&config.dataset_prefill_counter),
+                    getClusterTagMapCount(&cluster_tag_map),
+                    atomic_load(&config.requests_issued),
+                    atomic_load(&config.requests_finished));
+                
                 /* wait for index ingestion to complete*/
                 sleep(2); /* wait a bit before checking index status */
                 waitForIndexBackfillComplete(config.engine_type, config.selected_node_count, config.selected_nodes, config.ct, (const char**)&config.search.name, 1);
